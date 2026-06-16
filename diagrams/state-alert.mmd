@@ -1,0 +1,20 @@
+stateDiagram-v2
+    [*] --> NORMAL
+
+    NORMAL --> PENDING: condition_detected
+    PENDING --> NORMAL: condition_cleared_before_pending_period
+    PENDING --> FIRING: pending_period_elapsed
+
+    FIRING --> RESOLVED: condition_cleared
+    RESOLVED --> NORMAL: recovery_confirmed
+
+    FIRING --> RESOLVED: manual_resolve
+    PENDING --> RESOLVED: rule_disabled
+    FIRING --> RESOLVED: rule_disabled
+
+    RESOLVED --> PENDING: condition_detected_again
+
+    NORMAL: Метрика в допустимых пределах
+    PENDING: Условие алерта выполняется, но период ожидания ещё не истёк
+    FIRING: Алерт активен и требует реакции
+    RESOLVED: Проблемное состояние завершено

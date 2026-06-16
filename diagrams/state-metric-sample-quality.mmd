@@ -1,0 +1,12 @@
+stateDiagram-v2
+    [*] --> VALID: accepted_without_issues
+    [*] --> LATE: accepted_after_delay_window
+    [*] --> SUSPECT: clock_skew_or_quality_issue_detected
+
+    SUSPECT --> VALID: confirmed_by_policy_or_replay
+    SUSPECT --> LATE: confirmed_as_late_sample
+    SUSPECT --> [*]: isolated_as_processing_failure
+
+    VALID: Измерение принято и может участвовать в оперативных значениях
+    LATE: Измерение принято с опозданием и может учитываться ограниченно
+    SUSPECT: Измерение требует подтверждения или повторной обработки

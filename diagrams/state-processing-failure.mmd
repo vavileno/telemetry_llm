@@ -1,0 +1,17 @@
+stateDiagram-v2
+    [*] --> OPEN: processing_failed
+
+    OPEN --> RETRYING: retry_started
+    OPEN --> IGNORED: ignored_by_policy_or_admin
+
+    RETRYING --> RESOLVED: retry_succeeded
+    RETRYING --> OPEN: retry_failed
+    RETRYING --> IGNORED: ignored_by_policy_or_admin
+
+    RESOLVED --> [*]: archived
+    IGNORED --> [*]: archived
+
+    OPEN: Проблемные данные ожидают решения
+    RETRYING: Выполняется повторная обработка проблемных данных
+    RESOLVED: Данные успешно обработаны или проблема устранена
+    IGNORED: Данные исключены из обработки по явному правилу

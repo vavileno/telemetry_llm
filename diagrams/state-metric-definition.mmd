@@ -1,0 +1,15 @@
+stateDiagram-v2
+    [*] --> ACTIVE: definition_created
+
+    ACTIVE --> DEPRECATED: replaced_by_new_definition
+    ACTIVE --> DISABLED: disabled_by_admin
+
+    DEPRECATED --> ACTIVE: deprecation_cancelled
+    DEPRECATED --> DISABLED: disabled_by_admin
+
+    DISABLED --> ACTIVE: enabled_by_admin
+    DISABLED --> [*]: archived
+
+    ACTIVE: Метрика доступна для новых измерений и правил
+    DEPRECATED: Метрика сохранена для совместимости, но не рекомендуется для новых сценариев
+    DISABLED: Новые измерения и новые правила для метрики не принимаются

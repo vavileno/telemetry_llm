@@ -1,0 +1,11 @@
+stateDiagram-v2
+    [*] --> DISABLED: draft_saved
+    [*] --> ACTIVE: valid_rule_created
+
+    DISABLED --> ACTIVE: enabled_by_admin
+    ACTIVE --> DISABLED: disabled_by_admin
+
+    DISABLED --> [*]: archived
+
+    ACTIVE: Правило участвует в оценке метрик
+    DISABLED: Правило сохранено, но не создаёт новые алерты

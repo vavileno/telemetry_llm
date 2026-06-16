@@ -1,0 +1,24 @@
+stateDiagram-v2
+    [*] --> PENDING: job_created
+
+    PENDING --> RUNNING: started
+    PENDING --> CANCELLED: cancelled_before_start
+
+    RUNNING --> COMPLETED: all_selected_data_processed
+    RUNNING --> COMPLETED_WITH_ERRORS: processed_with_failures
+    RUNNING --> FAILED: unrecoverable_error
+    RUNNING --> CANCELLED: cancelled_by_admin
+
+    FAILED --> PENDING: restart_requested
+    COMPLETED_WITH_ERRORS --> PENDING: retry_failed_part_requested
+
+    COMPLETED --> [*]
+    COMPLETED_WITH_ERRORS --> [*]
+    CANCELLED --> [*]
+
+    PENDING: Задание создано и ожидает запуска
+    RUNNING: Идёт повторная обработка выбранных данных
+    COMPLETED: Все выбранные данные обработаны успешно
+    COMPLETED_WITH_ERRORS: Обработка завершена, часть данных не обработана
+    FAILED: Задание завершилось системной ошибкой
+    CANCELLED: Задание отменено

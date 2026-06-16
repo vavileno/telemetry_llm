@@ -1,0 +1,15 @@
+stateDiagram-v2
+    [*] --> ACTIVE: source_registered
+
+    ACTIVE --> INACTIVE: metrics_timeout
+    ACTIVE --> DISABLED: disabled_by_admin
+
+    INACTIVE --> ACTIVE: valid_metric_received
+    INACTIVE --> DISABLED: disabled_by_admin
+
+    DISABLED --> ACTIVE: enabled_by_admin
+    DISABLED --> [*]: deleted_or_archived
+
+    ACTIVE: Источник регулярно передаёт валидную телеметрию
+    INACTIVE: От источника давно не поступали валидные данные
+    DISABLED: Приём данных от источника отключён административно

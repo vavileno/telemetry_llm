@@ -1,0 +1,11 @@
+stateDiagram-v2
+    [*] --> DISABLED: draft_saved
+    [*] --> ACTIVE: valid_policy_created
+
+    DISABLED --> ACTIVE: enabled_by_admin
+    ACTIVE --> DISABLED: disabled_by_admin
+
+    DISABLED --> [*]: archived
+
+    ACTIVE: Политика участвует в расчёте агрегатов
+    DISABLED: Политика сохранена, но агрегаты по ней не рассчитываются
