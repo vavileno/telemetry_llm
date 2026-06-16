@@ -1,1 +1,472 @@
+entities:
+  TelemetrySource:
+    description: Наблюдаемый хост, микросервис или другой источник телеметрии.
+    fields:
+      id:
+        type: UUID
+      externalId:
+        type: string
+        required: true
+        unique: true
+      name:
+        type: string
+        required: true
+      type:
+        type: SourceType
+        required: true
+      status:
+        type: SourceStatus
+        required: true
+      attributes:
+        type: map<string, string>
+        description: Стабильные характеристики источника, не являющиеся измерениями.
+      registeredAt:
+        type: datetime
+        required: true
+      lastSeenAt:
+        type: datetime
+        nullable: true
 
+  MetricDefinition:
+    description: Определение измеряемого показателя и правил его интерпретации.
+    fields:
+      id:
+        type: UUID
+      name:
+        type: string
+        required: true
+        unique: true
+      displayName:
+        type: string
+        required: true
+      description:
+        type: text
+        nullable: true
+      kind:
+        type: MetricKind
+        required: true
+      valueType:
+        type: MetricValueType
+        required: true
+      unit:
+        type: string
+        nullable: true
+      allowedLabelKeys:
+        type: list<string>
+        description: Пустой список означает отсутствие дополнительного ограничения.
+      status:
+        type: DefinitionStatus
+        required: true
+      createdAt:
+        type: datetime
+        required: true
+      updatedAt:
+        type: datetime
+        required: true
+
+  TimeSeries:
+    description: Уникальный ряд значений одной метрики, источника и набора меток.
+    fields:
+      id:
+        type: UUID
+      metricDefinition:
+        type: MetricDefinition
+        required: true
+      source:
+        type: TelemetrySource
+        required: true
+      labels:
+        type: map<string, string>
+        required: true
+      fingerprint:
+        type: string
+        required: true
+        unique: true
+        description: Стабильный идентификатор комбинации метрики, источника и меток.
+      firstObservedAt:
+        type: datetime
+        required: true
+      lastObservedAt:
+        type: datetime
+        required: true
+
+  MetricSample:
+    description: Отдельное значение временного ряда в определённый момент времени.
+    fields:
+      id:
+        type: UUID
+      timeSeries:
+        type: TimeSeries
+        required: true
+      value:
+        type: decimal
+        required: true
+      observedAt:
+        type: datetime
+        required: true
+        description: Время измерения на источнике.
+      receivedAt:
+        type: datetime
+        required: true
+        description: Время приёма измерения системой.
+      quality:
+        type: SampleQuality
+        required: true
+      correlationId:
+        type: string
+        nullable: true
+        description: Идентификатор для обнаружения повторно переданных измерений.
+
+  AggregationPolicy:
+    description: Правило вычисления сводных значений метрики по временным окнам.
+    fields:
+      id:
+        type: UUID
+      metricDefinition:
+        type: MetricDefinition
+        required: true
+      functions:
+        type: list<AggregationFunction>
+        required: true
+      window:
+        type: duration
+        required: true
+      groupByLabels:
+        type: list<string>
+      status:
+        type: PolicyStatus
+        required: true
+      createdAt:
+        type: datetime
+        required: true
+      updatedAt:
+        type: datetime
+        required: true
+
+  MetricAggregate:
+    description: Сводное значение метрики, рассчитанное за временное окно.
+    fields:
+      id:
+        type: UUID
+      policy:
+        type: AggregationPolicy
+        required: true
+      metricDefinition:
+        type: MetricDefinition
+        required: true
+      source:
+        type: TelemetrySource
+        nullable: true
+        description: Может отсутствовать при агрегации по нескольким источникам.
+      labels:
+        type: map<string, string>
+        required: true
+      function:
+        type: AggregationFunction
+        required: true
+      value:
+        type: decimal
+        required: true
+      sampleCount:
+        type: integer
+        required: true
+      windowStartedAt:
+        type: datetime
+        required: true
+      windowEndedAt:
+        type: datetime
+        required: true
+      calculatedAt:
+        type: datetime
+        required: true
+
+  AlertRule:
+    description: Условие определения потенциально проблемного состояния по метрикам.
+    fields:
+      id:
+        type: UUID
+      name:
+        type: string
+        required: true
+        unique: true
+      description:
+        type: text
+        nullable: true
+      metricDefinition:
+        type: MetricDefinition
+        required: true
+      labelSelector:
+        type: map<string, string>
+      aggregationFunction:
+        type: AggregationFunction
+        nullable: true
+      comparison:
+        type: ComparisonOperator
+        required: true
+      threshold:
+        type: decimal
+        required: true
+      evaluationWindow:
+        type: duration
+        required: true
+      pendingPeriod:
+        type: duration
+        required: true
+      severity:
+        type: AlertSeverity
+        required: true
+      status:
+        type: RuleStatus
+        required: true
+      createdBy:
+        type: ActorReference
+        required: true
+      createdAt:
+        type: datetime
+        required: true
+      updatedAt:
+        type: datetime
+        required: true
+
+  Alert:
+    description: Текущее состояние срабатывания правила для конкретного набора меток.
+    fields:
+      id:
+        type: UUID
+      rule:
+        type: AlertRule
+        required: true
+      source:
+        type: TelemetrySource
+        nullable: true
+      labels:
+        type: map<string, string>
+        required: true
+      state:
+        type: AlertState
+        required: true
+      currentValue:
+        type: decimal
+        nullable: true
+      startedAt:
+        type: datetime
+        required: true
+      stateChangedAt:
+        type: datetime
+        required: true
+      resolvedAt:
+        type: datetime
+        nullable: true
+
+  AlertEvent:
+    description: Зафиксированный факт изменения состояния алерта.
+    fields:
+      id:
+        type: UUID
+      alert:
+        type: Alert
+        required: true
+      previousState:
+        type: AlertState
+        nullable: true
+      newState:
+        type: AlertState
+        required: true
+      value:
+        type: decimal
+        nullable: true
+      occurredAt:
+        type: datetime
+        required: true
+      context:
+        type: map<string, string>
+
+  ProcessingFailure:
+    description: Данные, которые не удалось обработать автоматически, и контекст ошибки.
+    fields:
+      id:
+        type: UUID
+      dataReference:
+        type: string
+        required: true
+      stage:
+        type: ProcessingStage
+        required: true
+      reason:
+        type: text
+        required: true
+      attemptCount:
+        type: integer
+        required: true
+      status:
+        type: FailureStatus
+        required: true
+      firstFailedAt:
+        type: datetime
+        required: true
+      lastFailedAt:
+        type: datetime
+        required: true
+      resolvedAt:
+        type: datetime
+        nullable: true
+
+  ReplayJob:
+    description: Задание на повторную обработку ранее принятых данных.
+    fields:
+      id:
+        type: UUID
+      requestedBy:
+        type: ActorReference
+        required: true
+      rangeStartedAt:
+        type: datetime
+        required: true
+      rangeEndedAt:
+        type: datetime
+        required: true
+      dataSelector:
+        type: map<string, string>
+        description: Критерии выбора данных помимо временного диапазона.
+      status:
+        type: ReplayJobStatus
+        required: true
+      processedCount:
+        type: integer
+        required: true
+      failedCount:
+        type: integer
+        required: true
+      requestedAt:
+        type: datetime
+        required: true
+      startedAt:
+        type: datetime
+        nullable: true
+      completedAt:
+        type: datetime
+        nullable: true
+
+value_objects:
+  ActorReference:
+    description: Ссылка на пользователя или внешний субъект, выполнивший действие.
+    fields:
+      id:
+        type: string
+        required: true
+      type:
+        type: ActorType
+        required: true
+      displayName:
+        type: string
+        nullable: true
+
+enums:
+  SourceType:
+    - HOST
+    - MICROSERVICE
+    - APPLICATION
+    - EXTERNAL_SYSTEM
+
+  SourceStatus:
+    - ACTIVE
+    - INACTIVE
+    - DISABLED
+
+  MetricKind:
+    - SYSTEM
+    - APPLICATION
+    - PLATFORM
+
+  MetricValueType:
+    - GAUGE
+    - COUNTER
+    - HISTOGRAM
+
+  DefinitionStatus:
+    - ACTIVE
+    - DEPRECATED
+    - DISABLED
+
+  SampleQuality:
+    - VALID
+    - LATE
+    - SUSPECT
+
+  AggregationFunction:
+    - COUNT
+    - SUM
+    - AVG
+    - MIN
+    - MAX
+    - P50
+    - P95
+    - P99
+
+  PolicyStatus:
+    - ACTIVE
+    - DISABLED
+
+  ComparisonOperator:
+    - GREATER_THAN
+    - GREATER_THAN_OR_EQUAL
+    - LESS_THAN
+    - LESS_THAN_OR_EQUAL
+    - EQUAL
+    - NOT_EQUAL
+
+  AlertSeverity:
+    - INFO
+    - WARNING
+    - CRITICAL
+
+  RuleStatus:
+    - ACTIVE
+    - DISABLED
+
+  AlertState:
+    - NORMAL
+    - PENDING
+    - FIRING
+    - RESOLVED
+
+  ActorType:
+    - USER
+    - SERVICE
+    - EXTERNAL_SYSTEM
+
+  ProcessingStage:
+    - INGESTION
+    - VALIDATION
+    - NORMALIZATION
+    - AGGREGATION
+    - ALERT_EVALUATION
+    - PERSISTENCE
+
+  FailureStatus:
+    - OPEN
+    - RETRYING
+    - RESOLVED
+    - IGNORED
+
+  ReplayJobStatus:
+    - PENDING
+    - RUNNING
+    - COMPLETED
+    - COMPLETED_WITH_ERRORS
+    - FAILED
+    - CANCELLED
+
+invariants:
+  - id: INV-001
+    description: Временной ряд однозначно определяется метрикой, источником и набором меток.
+  - id: INV-002
+    description: Время начала любого временного диапазона должно предшествовать времени его окончания.
+  - id: INV-003
+    description: Более старое измерение не может заменить последнее известное значение временного ряда.
+  - id: INV-004
+    description: Событие алертинга создаётся только при изменении состояния алерта.
+  - id: INV-005
+    description: Завершённое задание повторной обработки имеет время завершения.
+  - id: INV-006
+    description: Неактивное правило алертинга не участвует в вычислении состояния алертов.
