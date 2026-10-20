@@ -1,1 +1,386 @@
+system:
+  id: telemetry-platform
+  name: Система телеметрии
+  version: 0.1.0
+  language: ru
+  status: draft
 
+  purpose: >
+    Централизованный сбор, обработка, хранение, анализ и предоставление
+    телеметрии от хостов, микросервисов, приложений и внешних источников.
+
+  business_context:
+    scale:
+      active_sources: "> 1000"
+      normal_ingest_rate: "100000-200000 metrics/sec"
+      burst_ingest_rate_target: "up to 400000 metrics/sec for 5 minutes"
+    drivers:
+      - Метрики не должны теряться после подтверждённого приёма.
+      - Последние значения должны быть доступны с минимальной задержкой.
+      - Исторические данные должны быть доступны для аналитики и расследований.
+      - Алерты должны формироваться в реальном времени.
+      - Система должна продолжать работу при отказах отдельных компонентов.
+      - Система должна выдерживать всплески нагрузки во время deploy storm и incident.
+
+  scope:
+    in_scope:
+      - Приём системных и прикладных метрик.
+      - Валидация, нормализация и идентификация источников телеметрии.
+      - Надёжная передача данных между этапами обработки.
+      - Агрегация временных рядов.
+      - Формирование событий алертинга.
+      - Хранение последних, исторических и архивных данных.
+      - API для чтения последних и исторических значений.
+      - Интеграция с системами визуализации, уведомлений и аналитики.
+      - Повторная обработка ранее принятых данных.
+      - Изоляция проблемных данных.
+    out_of_scope:
+      - Установка и управление жизненным циклом операционных систем на хостах.
+      - Развёртывание и оркестрация прикладных сервисов.
+      - Автоматическое исправление причин инцидентов.
+      - Полноценное управление инцидентами и заявками.
+      - Хранение и анализ логов и распределённых трассировок.
+      - Управление бизнес-данными наблюдаемых приложений.
+      - Замена внешних каналов уведомлений и систем визуализации.
+
+  actors:
+    primary:
+      - id: telemetry-source
+        name: Источник телеметрии
+        description: Хост, микросервис, приложение или внешний источник, передающий метрики.
+      - id: sre
+        name: SRE / инженер эксплуатации
+        description: Анализирует текущее состояние, алерты и инциденты.
+      - id: devops
+        name: DevOps-инженер
+        description: Контролирует состояние платформы и инфраструктуры.
+      - id: developer
+        name: Разработчик
+        description: Исследует поведение сервисов по метрикам.
+      - id: support
+        name: Техническая поддержка
+        description: Проверяет состояние сервисов при пользовательских обращениях.
+      - id: engineering-manager
+        name: Руководитель инженерной команды
+        description: Использует дашборды и сводные показатели.
+      - id: system-admin
+        name: Администратор системы
+        description: Управляет источниками, правилами, проблемными данными и повторной обработкой.
+    external_systems:
+      - id: visualization-system
+        name: Система визуализации
+      - id: notification-system
+        name: Система уведомлений
+      - id: external-analytics
+        name: Внешняя аналитика
+      - id: incident-management
+        name: Система управления инцидентами
+
+  capabilities:
+    - id: CAP-001
+      name: Приём метрик
+      related_requirements:
+        - FR-001
+        - FR-002
+        - FR-003
+        - FR-004
+      related_use_cases:
+        - UC-001
+    - id: CAP-002
+      name: Буферизация и устойчивость к всплескам
+      related_requirements:
+        - FR-005
+    - id: CAP-003
+      name: Нормализация и агрегация
+      related_requirements:
+        - FR-006
+        - FR-007
+        - FR-008
+      related_use_cases:
+        - UC-003
+    - id: CAP-004
+      name: Алертинг
+      related_requirements:
+        - FR-009
+        - FR-010
+      related_use_cases:
+        - UC-005
+        - UC-006
+    - id: CAP-005
+      name: Хранение данных
+      related_requirements:
+        - FR-011
+        - FR-012
+        - FR-013
+    - id: CAP-006
+      name: Запросы и визуализация
+      related_requirements:
+        - FR-014
+        - FR-015
+        - FR-016
+      related_use_cases:
+        - UC-002
+        - UC-003
+        - UC-004
+    - id: CAP-007
+      name: Повторная обработка и проблемные данные
+      related_requirements:
+        - FR-017
+        - FR-018
+      related_use_cases:
+        - UC-008
+    - id: CAP-008
+      name: Контроль состояния платформы
+      related_requirements:
+        - FR-019
+      related_use_cases:
+        - UC-007
+    - id: CAP-009
+      name: Безопасный доступ
+      related_requirements:
+        - FR-020
+
+  domain:
+    source: spec/domain.yaml
+    core_entities:
+      - TelemetrySource
+      - MetricDefinition
+      - TimeSeries
+      - MetricSample
+      - AggregationPolicy
+      - MetricAggregate
+      - AlertRule
+      - Alert
+      - AlertEvent
+      - ProcessingFailure
+      - ReplayJob
+    value_objects:
+      - ActorReference
+    key_invariants:
+      - INV-001
+      - INV-002
+      - INV-003
+      - INV-004
+      - INV-005
+      - INV-006
+
+  functional_requirements:
+    source: spec/requirements.yaml
+    total: 20
+    groups:
+      ingestion:
+        - FR-001
+        - FR-002
+        - FR-003
+        - FR-004
+      processing:
+        - FR-005
+        - FR-006
+        - FR-007
+        - FR-008
+      alerting:
+        - FR-009
+        - FR-010
+      storage:
+        - FR-011
+        - FR-012
+        - FR-013
+      query:
+        - FR-014
+        - FR-015
+        - FR-016
+      operations:
+        - FR-017
+        - FR-018
+        - FR-019
+      security:
+        - FR-020
+
+  non_functional_requirements:
+    source: spec/non-functional-requirements.yaml
+    total: 37
+    categories:
+      - performance
+      - scalability
+      - reliability
+      - availability
+      - durability
+      - security
+      - observability
+      - operability
+      - compatibility
+    key_targets:
+      ingest_throughput: ">= 200000 metrics/sec"
+      burst_ingest_throughput: ">= 400000 metrics/sec for 5 minutes"
+      fresh_data_latency_p95: "<= 5s"
+      alert_evaluation_latency_p95: "<= 10s"
+      latest_query_latency_p95: "<= 500ms"
+      historical_query_latency_p95: "<= 3s for 24h range within result limits"
+      ingest_api_availability_monthly: ">= 99.9%"
+      query_api_availability_monthly: ">= 99.5%"
+
+  business_rules:
+    source: spec/business-rules.yaml
+    total: 25
+    key_rules:
+      - BR-001
+      - BR-002
+      - BR-003
+      - BR-005
+      - BR-009
+      - BR-011
+      - BR-015
+      - BR-017
+      - BR-018
+      - BR-020
+      - BR-024
+      - BR-025
+
+  use_cases:
+    source: spec/use-cases.yaml
+    items:
+      - id: UC-001
+        name: Приём метрик
+      - id: UC-002
+        name: Получение последних значений
+      - id: UC-003
+        name: Запрос исторических данных
+      - id: UC-004
+        name: Получение данных для дашборда
+      - id: UC-005
+        name: Настройка правила алертинга
+      - id: UC-006
+        name: Формирование события алертинга
+      - id: UC-007
+        name: Контроль состояния конвейера
+      - id: UC-008
+        name: Повторная обработка данных
+
+  data_flow:
+    description: Логический поток обработки телеметрии без фиксации конкретных технологий.
+    steps:
+      - order: 1
+        name: Collection
+        description: Источники собирают системные и прикладные метрики.
+      - order: 2
+        name: Ingestion
+        description: Система принимает, аутентифицирует и валидирует входящие данные.
+      - order: 3
+        name: Durable buffering
+        description: Принятые данные надёжно фиксируются и сглаживают всплески нагрузки.
+      - order: 4
+        name: Processing
+        description: Данные нормализуются, агрегируются и проверяются правилами алертинга.
+      - order: 5
+        name: Storage
+        description: Последние, исторические и архивные данные сохраняются согласно политике хранения.
+      - order: 6
+        name: Query and visualization
+        description: Пользователи и внешние системы получают данные через программный интерфейс.
+      - order: 7
+        name: Alert delivery
+        description: События алертинга становятся доступны получателям и внешним системам.
+
+  integrations:
+    inbound:
+      - Источники телеметрии
+      - Агенты сбора метрик
+      - Внешние системы, передающие метрики
+    outbound:
+      - Системы визуализации
+      - Системы уведомлений
+      - Внешняя аналитика
+      - Системы управления инцидентами
+
+  diagrams:
+    context: diagrams/context.mmd
+    containers: diagrams/containers.mmd
+    sequence_create_order_legacy_name: diagrams/sequence-create-order.mmd
+    states:
+      TelemetrySource: diagrams/state-telemetry-source.mmd
+      MetricDefinition: diagrams/state-metric-definition.mmd
+      MetricSample: diagrams/state-metric-sample-quality.mmd
+      AggregationPolicy: diagrams/state-aggregation-policy.mmd
+      AlertRule: diagrams/state-alert-rule.mmd
+      Alert: diagrams/state-alert.mmd
+      ProcessingFailure: diagrams/state-processing-failure.mmd
+      ReplayJob: diagrams/state-replay-job.mmd
+
+  documentation:
+    product_overview: docs/00-product-overview.md
+    domain_model: docs/01-domain-model.md
+    requirements: docs/02-requirements.md
+    use_cases: docs/03-use-cases.md
+    non_functional_requirements: docs/04-non-functional-requirements.md
+    architecture: docs/05-architecture.md
+    api: docs/06-api.md
+    data_model: docs/07-data-model.md
+    ui_ux: docs/08-ui-ux.md
+    security: docs/09-security.md
+    dev_guidelines: docs/10-dev-guidelines.md
+    glossary: docs/11-glossary.md
+
+  specifications:
+    domain: spec/domain.yaml
+    requirements: spec/requirements.yaml
+    non_functional_requirements: spec/non-functional-requirements.yaml
+    business_rules: spec/business-rules.yaml
+    use_cases: spec/use-cases.yaml
+    api_openapi: spec/api.openapi.yaml
+    database_dbml: spec/database.dbml
+    events: spec/events.yaml
+
+  decisions:
+    adr:
+      - adr/0001-architecture-style.md
+      - adr/0002-database-choice.md
+      - adr/0003-authentication.md
+
+  traceability:
+    requirements_to_use_cases:
+      FR-001:
+        - UC-001
+      FR-002:
+        - UC-001
+      FR-003:
+        - UC-001
+      FR-004:
+        - UC-001
+      FR-007:
+        - UC-003
+      FR-008:
+        - UC-003
+      FR-009:
+        - UC-005
+      FR-010:
+        - UC-006
+      FR-011:
+        - UC-002
+      FR-014:
+        - UC-002
+        - UC-004
+      FR-015:
+        - UC-003
+        - UC-004
+      FR-016:
+        - UC-004
+      FR-017:
+        - UC-008
+      FR-018:
+        - UC-008
+      FR-019:
+        - UC-007
+      FR-020:
+        - UC-002
+        - UC-003
+        - UC-004
+        - UC-005
+        - UC-007
+        - UC-008
+
+  open_items:
+    - Заполнить архитектурную спецификацию и контейнерную диаграмму.
+    - Сформировать OpenAPI-контракт.
+    - Описать событийные контракты.
+    - Описать физическую модель данных после выбора хранилищ.
+    - Заполнить ADR с принятыми архитектурными решениями.
