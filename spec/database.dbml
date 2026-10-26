@@ -1,1 +1,576 @@
+// Физическая модель данных системы телеметрии.
+//
+// Источники истины:
+//   - spec/domain.yaml           — сущности, поля, перечисления, инварианты INV-001..INV-006;
+//   - docs/01-domain-model.md    — связи сущностей;
+//   - docs/00-product-overview.md, docs/11-glossary.md — распределение данных по хранилищам;
+//   - spec/requirements.yaml     — FR-011..FR-013, FR-017, FR-018;
+//   - spec/business-rules.yaml   — BR-001, BR-004, BR-009..BR-020;
+//   - adr/0002-database-choice.md — выбор хранилищ, сроки хранения, физические параметры.
+//
+// Логические схемы и хранилища:
+//   meta    — конфигурация, состояние алертинга, операционные данные.
+//             PostgreSQL 16 (ADR-0002).
+//   ts      — исторические данные: исходные измерения и агрегаты. ClickHouse.
+//   latest  — последние значения временных рядов. Redis.
+//   archive — каталог архивных объектов длительного хранения. MinIO.
+//
+// Соглашения по представлению доменных типов:
+//   - map<string, string> в meta   — отдельная таблица-словарь (составной PK из ключа и владельца);
+//   - map<string, string> в ts     — колонка Map(K, V) хранилища;
+//   - list<T>                      — таблица-словарь с составным PK;
+//   - duration                     — *_seconds bigint (целое число секунд);
+//   - ActorReference               — три колонки *_id / *_type / *_display_name;
+//   - datetime                     — timestamp, все метки времени в UTC;
+//   - decimal                      — decimal(38, 12).
+//
+// Отличия от spec/domain.yaml (только физические детали, помечены комментарием «тех.»):
+//   - labels_fingerprint — hash набора меток, обеспечивает уникальность строки
+//     «правило/политика + набор меток» (BR-009, BR-011);
+//   - archive_object и его статусы — в domain.yaml отсутствуют, нужны для FR-013;
+//   - MetricAggregate.function назван aggregation_function: FUNCTION зарезервирован в SQL.
+//
+// Физические параметры ts (движок, партиционирование, порядок сортировки, TTL)
+// зафиксированы в adr/0002-database-choice.md и в note соответствующих таблиц.
+//
+// Открытые вопросы:
+//   - модель аутентификации (FR-020) описана в ADR-0003, который пока не заполнен;
+//   - политики хранения (NFR, durability) не описаны в domain.yaml — кандидат в отдельные таблицы.
 
+
+// ============================================================================
+// Перечисления (spec/domain.yaml → enums)
+// ============================================================================
+
+enum source_type {
+  HOST
+  MICROSERVICE
+  APPLICATION
+  EXTERNAL_SYSTEM
+}
+
+enum source_status {
+  ACTIVE
+  INACTIVE
+  DISABLED
+}
+
+enum metric_kind {
+  SYSTEM
+  APPLICATION
+  PLATFORM
+}
+
+enum metric_value_type {
+  GAUGE
+  COUNTER
+  HISTOGRAM
+}
+
+enum definition_status {
+  ACTIVE
+  DEPRECATED
+  DISABLED
+}
+
+enum sample_quality {
+  VALID
+  LATE
+  SUSPECT
+}
+
+enum aggregation_function {
+  COUNT
+  SUM
+  AVG
+  MIN
+  MAX
+  P50
+  P95
+  P99
+}
+
+enum policy_status {
+  ACTIVE
+  DISABLED
+}
+
+enum comparison_operator {
+  GREATER_THAN
+  GREATER_THAN_OR_EQUAL
+  LESS_THAN
+  LESS_THAN_OR_EQUAL
+  EQUAL
+  NOT_EQUAL
+}
+
+enum alert_severity {
+  INFO
+  WARNING
+  CRITICAL
+}
+
+enum rule_status {
+  ACTIVE
+  DISABLED
+}
+
+enum alert_state {
+  NORMAL
+  PENDING
+  FIRING
+  RESOLVED
+}
+
+enum actor_type {
+  USER
+  SERVICE
+  EXTERNAL_SYSTEM
+}
+
+enum processing_stage {
+  INGESTION
+  VALIDATION
+  NORMALIZATION
+  AGGREGATION
+  ALERT_EVALUATION
+  PERSISTENCE
+}
+
+enum failure_status {
+  OPEN
+  RETRYING
+  RESOLVED
+  IGNORED
+}
+
+enum replay_job_status {
+  PENDING
+  RUNNING
+  COMPLETED
+  COMPLETED_WITH_ERRORS
+  FAILED
+  CANCELLED
+}
+
+// тех. Перечисления отсутствуют в domain.yaml, нужны для FR-013 (архивирование).
+enum archive_status {
+  PENDING
+  COMPLETED
+  FAILED
+}
+
+// тех.
+enum archive_data_kind {
+  RAW_SAMPLES
+  AGGREGATES
+}
+
+
+// ============================================================================
+// Схема meta — конфигурация, алертинг, операционные данные
+// ============================================================================
+
+// TelemetrySource: наблюдаемый хост, микросервис или другой источник телеметрии.
+Table meta.telemetry_source {
+  id uuid [pk]
+  external_id varchar [not null, unique, note: 'BR-001: внешний идентификатор источника уникален']
+  name varchar [not null]
+  type source_type [not null]
+  status source_status [not null, note: 'BR-002: принимать метрики только от ACTIVE-источников']
+  registered_at timestamp [not null]
+  last_seen_at timestamp
+
+  indexes {
+    (status, type) [name: 'ix_source_status_type', note: 'отбор активных источников']
+  }
+  note: 'Наблюдаемый хост, микросервис или другой источник телеметрии. spec/domain.yaml: TelemetrySource.'
+}
+
+// tech. Словарь TelemetrySource.attributes (map<string, string>).
+Table meta.source_attribute {
+  telemetry_source_id uuid
+  attr_key varchar
+  attr_value varchar [not null]
+
+  indexes {
+    (telemetry_source_id, attr_key) [pk]
+  }
+}
+
+// MetricDefinition: определение измеряемого показателя и правил его интерпретации.
+Table meta.metric_definition {
+  id uuid [pk]
+  name varchar [not null, unique, note: 'имя в утверждённых правилах именования, FR-006']
+  display_name varchar [not null]
+  description text
+  kind metric_kind [not null]
+  value_type metric_value_type [not null]
+  unit varchar
+  status definition_status [not null, note: 'BR-004: измерение не может ссылаться на отключённую метрику']
+  created_at timestamp [not null]
+  updated_at timestamp [not null]
+
+  note: 'Определение измеряемого показателя. spec/domain.yaml: MetricDefinition.'
+}
+
+// tech. Словарь MetricDefinition.allowedLabelKeys (list<string>); пустая таблица = ограничение отсутствует.
+Table meta.metric_definition_allowed_label {
+  metric_definition_id uuid
+  label_key varchar
+
+  indexes {
+    (metric_definition_id, label_key) [pk]
+  }
+}
+
+// AggregationPolicy: правило вычисления сводных значений по временным окнам.
+Table meta.aggregation_policy {
+  id uuid [pk]
+  metric_definition_id uuid [not null]
+  window_seconds bigint [not null, check: `window_seconds > 0`, note: 'BR-012: окно положительной длительности']
+  status policy_status [not null, note: 'BR-013: неактивная политика хранится до исправления настроек']
+  created_at timestamp [not null]
+  updated_at timestamp [not null]
+
+  indexes {
+    (metric_definition_id, status) [name: 'ix_policy_metric_status']
+  }
+}
+
+// tech. Словарь AggregationPolicy.functions (list<AggregationFunction>).
+Table meta.aggregation_policy_function {
+  aggregation_policy_id uuid
+  function aggregation_function
+
+  indexes {
+    (aggregation_policy_id, function) [pk]
+  }
+}
+
+// tech. Словарь AggregationPolicy.groupByLabels (list<string>).
+Table meta.aggregation_policy_group_by_label {
+  aggregation_policy_id uuid
+  label_key varchar
+
+  indexes {
+    (aggregation_policy_id, label_key) [pk]
+  }
+}
+
+// AlertRule: условие определения потенциально проблемного состояния по метрикам.
+Table meta.alert_rule {
+  id uuid [pk]
+  name varchar [not null, unique]
+  description text
+  metric_definition_id uuid [not null]
+  aggregation_function aggregation_function [note: 'nullable: правило может оценивать сырые значения']
+  comparison comparison_operator [not null]
+  threshold decimal(38, 12) [not null]
+  evaluation_window_seconds bigint [not null]
+  pending_period_seconds bigint [not null]
+  severity alert_severity [not null]
+  status rule_status [not null, note: 'BR-016: DISABLED не участвует в оценке, BR-015: ACTIVE требует полной конфигурации']
+  created_by_id varchar [not null]
+  created_by_type actor_type [not null]
+  created_by_display_name varchar
+  created_at timestamp [not null]
+  updated_at timestamp [not null]
+
+  indexes {
+    (status, metric_definition_id) [name: 'ix_rule_status_metric']
+  }
+  note: 'Поле label_selector вынесено в meta.alert_rule_label_selector. ActorReference разложен в created_by_*. spec/domain.yaml: AlertRule.'
+}
+
+// tech. Словарь AlertRule.labelSelector (map<string, string>).
+Table meta.alert_rule_label_selector {
+  alert_rule_id uuid
+  label_key varchar
+  label_value varchar [not null]
+
+  indexes {
+    (alert_rule_id, label_key) [pk]
+  }
+}
+
+// Alert: текущее состояние срабатывания правила для конкретного набора меток.
+Table meta.alert {
+  id uuid [pk]
+  alert_rule_id uuid [not null]
+  telemetry_source_id uuid [note: 'nullable: агрегат может охватывать несколько источников']
+  labels_fingerprint varchar [not null, note: 'тех.: hash набора меток']
+  state alert_state [not null]
+  current_value decimal(38, 12)
+  started_at timestamp [not null]
+  state_changed_at timestamp [not null]
+  resolved_at timestamp
+
+  indexes {
+    (alert_rule_id, labels_fingerprint) [unique, note: 'одна строка состояния на правило и набор меток; история — в alert_event']
+  }
+  note: 'spec/domain.yaml: Alert. Допустимые переходы BR-017: NORMAL -> PENDING -> FIRING -> RESOLVED -> NORMAL.'
+}
+
+// tech. Словарь Alert.labels (map<string, string>).
+Table meta.alert_label {
+  alert_id uuid
+  label_key varchar
+  label_value varchar [not null]
+
+  indexes {
+    (alert_id, label_key) [pk]
+  }
+}
+
+// AlertEvent: зафиксированный факт изменения состояния алерта.
+Table meta.alert_event {
+  id uuid [pk]
+  alert_id uuid [not null]
+  previous_state alert_state [note: 'nullable: первое обнаружение нарушения']
+  new_state alert_state [not null]
+  value decimal(38, 12)
+  occurred_at timestamp [not null]
+
+  indexes {
+    (alert_id, occurred_at) [name: 'ix_event_alert_time']
+  }
+  note: 'Неизменяемо после создания (BR-019), создаётся только при изменении состояния (BR-018, INV-004). PostgreSQL: партиционирование по месяцам, retention 90 дней (ADR-0002).'
+}
+
+// tech. Словарь AlertEvent.context (map<string, string>).
+Table meta.alert_event_context {
+  alert_event_id uuid
+  context_key varchar
+  context_value varchar [not null]
+
+  indexes {
+    (alert_event_id, context_key) [pk]
+  }
+}
+
+// ProcessingFailure: данные, которые не удалось обработать автоматически.
+Table meta.processing_failure {
+  id uuid [pk]
+  data_reference varchar [not null, note: 'ссылка на исходные данные: поток, партиция, смещение']
+  stage processing_stage [not null]
+  reason text [not null]
+  attempt_count integer [not null]
+  status failure_status [not null, note: 'BR-020: изоляция после допустимого числа попыток, BR-021: не блокирует поток']
+  first_failed_at timestamp [not null]
+  last_failed_at timestamp [not null]
+  resolved_at timestamp
+
+  indexes {
+    (status, stage) [name: 'ix_failure_status_stage', note: 'FR-018: очередь повторных попыток']
+    (last_failed_at) [name: 'ix_failure_last_attempt']
+  }
+  note: 'spec/domain.yaml: ProcessingFailure. PostgreSQL: партиционирование по месяцам, retention 90 дней (ADR-0002).'
+}
+
+// ReplayJob: задание на повторную обработку ранее принятых данных.
+Table meta.replay_job {
+  id uuid [pk]
+  requested_by_id varchar [not null]
+  requested_by_type actor_type [not null]
+  requested_by_display_name varchar
+  range_started_at timestamp [not null]
+  range_ended_at timestamp [not null]
+  status replay_job_status [not null]
+  processed_count integer [not null]
+  failed_count integer [not null]
+  requested_at timestamp [not null]
+  started_at timestamp
+  completed_at timestamp
+
+  indexes {
+    (status, requested_at) [name: 'ix_replay_status_requested']
+  }
+  checks {
+    // INV-002, BR-022: границы диапазона повторной обработки
+    `range_started_at < range_ended_at` [name: 'chk_replay_range']
+    // INV-005: завершённое задание содержит время завершения
+    `status not in ('COMPLETED', 'COMPLETED_WITH_ERRORS') or completed_at is not null` [name: 'chk_replay_completed_at']
+  }
+  note: 'Поле dataSelector вынесено в meta.replay_job_selector. spec/domain.yaml: ReplayJob.'
+}
+
+// tech. Словарь ReplayJob.dataSelector (map<string, string>).
+Table meta.replay_job_selector {
+  replay_job_id uuid
+  selector_key varchar
+  selector_value varchar [not null]
+
+  indexes {
+    (replay_job_id, selector_key) [pk]
+  }
+}
+
+
+// ============================================================================
+// Схема ts — исторические данные (ClickHouse)
+// ============================================================================
+
+// TimeSeries: уникальный ряд значений одной метрики, источника и набора меток.
+Table ts.time_series {
+  id uuid [pk]
+  metric_definition_id uuid [not null]
+  telemetry_source_id uuid [not null]
+  labels map(varchar, varchar) [not null]
+  fingerprint varchar [not null, unique, note: 'INV-001, BR-009: hash метрики, источника и меток']
+  first_observed_at timestamp [not null]
+  last_observed_at timestamp [not null]
+
+  indexes {
+    (metric_definition_id, telemetry_source_id) [name: 'ix_series_metric_source']
+  }
+  note: 'Измерение ряда. ClickHouse: ReplacingMergeTree; связи с meta.* логические — внешние ключи в ClickHouse не обеспечиваются (ADR-0002).'
+}
+
+// MetricSample: отдельное значение временного ряда.
+Table ts.metric_sample {
+  id uuid [pk]
+  time_series_id uuid [not null]
+  value decimal(38, 12) [not null]
+  observed_at timestamp [not null, note: 'время измерения на источнике']
+  received_at timestamp [not null, note: 'время приёма измерения системой']
+  quality sample_quality [not null, note: 'LATE/ SUSPECT — BR-006, BR-007, BR-010']
+  correlation_id varchar [note: 'обнаружение повторно переданных измерений, BR-011']
+
+  indexes {
+    (time_series_id, observed_at) [unique, name: 'uq_sample_identity', note: 'BR-011, FR-012: повторная доставка не создаёт новую строку']
+    (observed_at) [name: 'ix_sample_observed_at', note: 'FR-015: выборки по периоду']
+  }
+  note: 'Исходные измерения. ClickHouse: PARTITION BY toDate(observed_at), ORDER BY (metric_definition_id, fingerprint, observed_at), TTL 7 дней (ADR-0002).'
+}
+
+// MetricAggregate: сводное значение метрики за временное окно.
+Table ts.metric_aggregate {
+  id uuid [pk]
+  aggregation_policy_id uuid [not null]
+  metric_definition_id uuid [not null]
+  telemetry_source_id uuid [note: 'nullable: агрегация по нескольким источникам']
+  labels_fingerprint varchar [not null, note: 'тех.: hash набора меток']
+  labels map(varchar, varchar) [not null]
+  aggregation_function aggregation_function [not null, note: 'domain.yaml: MetricAggregate.function']
+  value decimal(38, 12) [not null]
+  sample_count integer [not null]
+  window_started_at timestamp [not null]
+  window_ended_at timestamp [not null]
+  calculated_at timestamp [not null]
+
+  indexes {
+    (aggregation_policy_id, telemetry_source_id, labels_fingerprint, aggregation_function, window_started_at) [unique, name: 'uq_aggregate_identity', note: 'BR-011: идемпотентность повторной обработки; для СУБД с NULL != NULL вместо NULL используется маркер']
+    (metric_definition_id, window_started_at) [name: 'ix_aggregate_metric_window', note: 'FR-015: запросы агрегатов за период']
+  }
+  checks {
+    // BR-014: агрегат без исходных данных не существует
+    `sample_count > 0` [name: 'chk_aggregate_sample_count']
+    // BR-012, INV-002: начало окна предшествует окончанию
+    `window_started_at < window_ended_at` [name: 'chk_aggregate_window']
+  }
+  note: 'ClickHouse: ReplacingMergeTree, TTL 30 дней для 1s-агрегатов, шардирование по cityHash64(fingerprint) (ADR-0002).'
+}
+
+
+// ============================================================================
+// Схема latest — последние значения (Redis)
+// ============================================================================
+
+// Последнее принятое значение каждого временного ряда. Физически ключ Redis —
+// TimeSeries.fingerprint; строка ниже — реляционная форма той же записи.
+Table latest.metric_value {
+  time_series_id uuid [pk]
+  value decimal(38, 12) [not null]
+  observed_at timestamp [not null]
+  received_at timestamp [not null]
+  quality sample_quality [not null, note: 'BR-010: SUSPECT не заменяет последнее значение до подтверждения']
+
+  note: 'FR-011, BR-010, INV-003: запись выполняется условно — более старое измерение не заменяет сохранённое; BR-011: повторная запись не меняет конечный результат. Физически — RedisTimeSeries в инстансе latest (noeviction, AOF), горячее окно 15 минут (ADR-0002).'
+}
+
+
+// ============================================================================
+// Схема archive — каталог архивных объектов (MinIO)
+// ============================================================================
+
+// tech. Метаданные объектов длительного хранения; сами данные лежат в MinIO.
+// Сущность отсутствует в domain.yaml, требуется для FR-013.
+Table archive.archive_object {
+  id uuid [pk]
+  object_key varchar [not null, unique, note: 'ключ объекта в хранилище MinIO']
+  data_kind archive_data_kind [not null]
+  range_started_at timestamp [not null]
+  range_ended_at timestamp [not null]
+  format varchar [not null, note: 'формат архива, например parquet']
+  record_count bigint
+  size_bytes bigint
+  checksum varchar [not null, note: 'целостность архива при последующем чтении']
+  status archive_status [not null]
+  failure_reason text [note: 'FR-013: ошибки архивирования допускают повторный запуск']
+  created_at timestamp [not null]
+  completed_at timestamp
+
+  indexes {
+    (status, data_kind, range_started_at) [name: 'ix_archive_status_range']
+  }
+  checks {
+    // INV-002: границы архивируемого диапазона
+    `range_started_at < range_ended_at` [name: 'chk_archive_range']
+    // INV-005 по аналогии с ReplayJob: успешное завершение фиксируется временем
+    `status <> 'COMPLETED' or completed_at is not null` [name: 'chk_archive_completed_at']
+  }
+  note: 'MinIO bucket telemetry-archive, Parquet + ZSTD, разбиение dt=.../resolution=.../metric=... (ADR-0002). Удаление данных из оперативного хранилища допустимо только после archive_object.status = COMPLETED и проверки checksum (FR-013).'
+}
+
+
+// ============================================================================
+// Связи
+// ============================================================================
+
+// --- meta ---
+
+Ref: meta.source_attribute.telemetry_source_id > meta.telemetry_source.id [delete: cascade]
+
+Ref: meta.metric_definition_allowed_label.metric_definition_id > meta.metric_definition.id [delete: cascade]
+
+Ref: meta.aggregation_policy.metric_definition_id > meta.metric_definition.id [delete: restrict]
+
+Ref: meta.aggregation_policy_function.aggregation_policy_id > meta.aggregation_policy.id [delete: cascade]
+
+Ref: meta.aggregation_policy_group_by_label.aggregation_policy_id > meta.aggregation_policy.id [delete: cascade]
+
+Ref: meta.alert_rule.metric_definition_id > meta.metric_definition.id [delete: restrict]
+
+Ref: meta.alert_rule_label_selector.alert_rule_id > meta.alert_rule.id [delete: cascade]
+
+// Удаление правила ограничено: история алертинга (alert_event) не должна теряться, BR-019.
+Ref: meta.alert.alert_rule_id > meta.alert_rule.id [delete: restrict]
+
+Ref: meta.alert.telemetry_source_id >? meta.telemetry_source.id
+
+Ref: meta.alert_label.alert_id > meta.alert.id [delete: cascade]
+
+Ref: meta.alert_event.alert_id > meta.alert.id [delete: cascade]
+
+Ref: meta.alert_event_context.alert_event_id > meta.alert_event.id [delete: cascade]
+
+Ref: meta.replay_job_selector.replay_job_id > meta.replay_job.id [delete: cascade]
+
+// --- ts → meta (логические связи, см. примечание к ts.time_series) ---
+
+Ref: ts.time_series.metric_definition_id > meta.metric_definition.id
+
+Ref: ts.time_series.telemetry_source_id > meta.telemetry_source.id
+
+Ref: ts.metric_sample.time_series_id > ts.time_series.id
+
+Ref: ts.metric_aggregate.aggregation_policy_id > meta.aggregation_policy.id
+
+Ref: ts.metric_aggregate.metric_definition_id > meta.metric_definition.id
+
+Ref: ts.metric_aggregate.telemetry_source_id >? meta.telemetry_source.id
+
+// --- latest → ts ---
+
+Ref: latest.metric_value.time_series_id > ts.time_series.id [delete: cascade]

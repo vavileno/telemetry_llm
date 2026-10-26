@@ -1,0 +1,231 @@
+non_functional_requirements:
+  performance:
+    - id: NFR-PERF-001
+      description: Система должна устойчиво принимать не менее 200 000 метрик в секунду в штатном режиме.
+      metric: ingest_throughput
+      target: ">= 200000 metrics/sec"
+      priority: must
+
+    - id: NFR-PERF-002
+      description: Система должна выдерживать кратковременные всплески входящего потока до 2x от штатной нагрузки.
+      metric: burst_ingest_throughput
+      target: ">= 400000 metrics/sec for 5 minutes"
+      priority: should
+
+    - id: NFR-PERF-003
+      description: Задержка от приёма метрики до доступности последнего значения для 95% метрик не должна превышать 5 секунд.
+      metric: fresh_data_latency_p95
+      target: "<= 5s"
+      priority: must
+
+    - id: NFR-PERF-004
+      description: Задержка формирования события алертинга для 95% проверок не должна превышать 10 секунд после поступления релевантных данных.
+      metric: alert_evaluation_latency_p95
+      target: "<= 10s"
+      priority: must
+
+    - id: NFR-PERF-005
+      description: Время ответа API получения последних значений для 95% запросов не должно превышать 500 мс.
+      metric: latest_query_latency_p95
+      target: "<= 500ms"
+      priority: must
+
+    - id: NFR-PERF-006
+      description: Время ответа API исторических запросов для 95% запросов в пределах 24 часов не должно превышать 3 секунд при соблюдении лимитов результата.
+      metric: historical_query_latency_p95
+      target: "<= 3s"
+      priority: should
+
+  scalability:
+    - id: NFR-SCALE-001
+      description: Система должна поддерживать более 1000 активных источников телеметрии.
+      metric: active_sources_count
+      target: "> 1000"
+      priority: must
+
+    - id: NFR-SCALE-002
+      description: Система должна масштабировать приём, обработку и запросы независимо друг от друга.
+      metric: independent_scaling_capability
+      target: "supported"
+      priority: must
+
+    - id: NFR-SCALE-003
+      description: Добавление вычислительных ресурсов должно увеличивать пропускную способность обработки без остановки всей системы.
+      metric: horizontal_scaling_without_global_downtime
+      target: "supported"
+      priority: should
+
+    - id: NFR-SCALE-004
+      description: Система должна иметь настраиваемые лимиты на размер пакета, количество меток и кардинальность, чтобы защищать платформу от неконтролируемого роста нагрузки.
+      metric: cardinality_and_payload_limits
+      target: "configurable"
+      priority: must
+
+  reliability:
+    - id: NFR-REL-001
+      description: Принятая и подтверждённая метрика не должна теряться при отказе одного экземпляра компонента.
+      metric: acknowledged_metric_loss
+      target: "0 for single-instance failure"
+      priority: must
+
+    - id: NFR-REL-002
+      description: Система должна обеспечивать повторную обработку ранее принятых данных без повторной отправки источниками.
+      metric: replay_capability
+      target: "supported"
+      priority: must
+
+    - id: NFR-REL-003
+      description: Проблемные данные не должны блокировать обработку независимых валидных данных.
+      metric: failure_isolation
+      target: "supported"
+      priority: must
+
+    - id: NFR-REL-004
+      description: Повторная доставка одного и того же измерения не должна создавать неконтролируемые дубликаты доменных результатов.
+      metric: idempotent_processing
+      target: "supported"
+      priority: must
+
+    - id: NFR-REL-005
+      description: Система должна автоматически восстанавливать обработку после кратковременного отказа компонента.
+      metric: automatic_recovery
+      target: "supported"
+      priority: must
+
+  availability:
+    - id: NFR-AVAIL-001
+      description: Доступность API приёма метрик должна быть не ниже 99.9% в месяц.
+      metric: ingest_api_availability_monthly
+      target: ">= 99.9%"
+      priority: must
+
+    - id: NFR-AVAIL-002
+      description: Доступность API чтения последних и исторических метрик должна быть не ниже 99.5% в месяц.
+      metric: query_api_availability_monthly
+      target: ">= 99.5%"
+      priority: must
+
+    - id: NFR-AVAIL-003
+      description: Плановое обслуживание не должно требовать полной остановки приёма метрик.
+      metric: maintenance_without_full_ingest_stop
+      target: "supported"
+      priority: should
+
+  durability:
+    - id: NFR-DUR-001
+      description: Подтверждённые данные должны сохраняться в устойчивом хранилище до истечения политики хранения.
+      metric: retained_acknowledged_data
+      target: "100% within retention policy"
+      priority: must
+
+    - id: NFR-DUR-002
+      description: Политика хранения должна отдельно настраиваться для оперативных, исторических и архивных данных.
+      metric: retention_policy_granularity
+      target: "hot, historical, archive"
+      priority: must
+
+    - id: NFR-DUR-003
+      description: Удаление данных по истечении срока хранения должно быть контролируемым и трассируемым.
+      metric: retention_deletion_auditability
+      target: "supported"
+      priority: should
+
+  security:
+    - id: NFR-SEC-001
+      description: Все программные интерфейсы должны требовать аутентификации, кроме явно разрешённых health-check эндпоинтов.
+      metric: authenticated_api_coverage
+      target: "100% protected endpoints"
+      priority: must
+
+    - id: NFR-SEC-002
+      description: Права чтения метрик должны быть отделены от прав управления источниками, правилами алертинга и повторной обработкой.
+      metric: role_separation
+      target: "supported"
+      priority: must
+
+    - id: NFR-SEC-003
+      description: Все сетевые взаимодействия между внешними клиентами и системой должны выполняться по защищённому каналу.
+      metric: encrypted_external_transport
+      target: "TLS required"
+      priority: must
+
+    - id: NFR-SEC-004
+      description: Секреты, токены и ключи доступа не должны храниться в открытом виде в конфигурации или логах.
+      metric: secret_plaintext_exposure
+      target: "0"
+      priority: must
+
+    - id: NFR-SEC-005
+      description: Административные операции должны регистрироваться с указанием субъекта, времени, действия и результата.
+      metric: administrative_audit_coverage
+      target: "100%"
+      priority: must
+
+  observability:
+    - id: NFR-OBS-001
+      description: Компоненты системы должны публиковать технические метрики о скорости приёма, задержке обработки, ошибках и состоянии очередей.
+      metric: platform_metrics_coverage
+      target: "ingest, processing, storage, query, alerting"
+      priority: must
+
+    - id: NFR-OBS-002
+      description: Компоненты системы должны предоставлять признаки готовности и работоспособности.
+      metric: health_readiness_coverage
+      target: "100% runtime components"
+      priority: must
+
+    - id: NFR-OBS-003
+      description: Ошибки обработки, отказы записи и события алертинга должны логироваться в структурированном виде.
+      metric: structured_logging_coverage
+      target: "supported"
+      priority: must
+
+    - id: NFR-OBS-004
+      description: Для запросов и обработки данных должен сохраняться correlation id, если он был передан или создан системой.
+      metric: correlation_id_propagation
+      target: "supported"
+      priority: should
+
+  operability:
+    - id: NFR-OPS-001
+      description: Конфигурация правил алертинга, политик агрегации, лимитов и сроков хранения должна изменяться без пересборки системы.
+      metric: runtime_configurability
+      target: "supported"
+      priority: must
+
+    - id: NFR-OPS-002
+      description: Изменения критичной конфигурации должны валидироваться до применения.
+      metric: configuration_validation
+      target: "100% critical config changes"
+      priority: must
+
+    - id: NFR-OPS-003
+      description: Система должна поддерживать безопасное поэтапное обновление компонентов без полной остановки платформы.
+      metric: rolling_update_capability
+      target: "supported"
+      priority: should
+
+    - id: NFR-OPS-004
+      description: Операции повторной обработки должны иметь видимый прогресс, итог и возможность безопасного повторного запуска.
+      metric: replay_operability
+      target: "progress, result, restart"
+      priority: must
+
+  compatibility:
+    - id: NFR-COMP-001
+      description: Публичные API должны быть версионированы.
+      metric: api_versioning
+      target: "supported"
+      priority: must
+
+    - id: NFR-COMP-002
+      description: Несовместимые изменения API должны вводиться через новую версию без немедленного нарушения работы существующих клиентов.
+      metric: backward_compatibility_policy
+      target: "supported"
+      priority: should
+
+    - id: NFR-COMP-003
+      description: Форматы входящих и исходящих данных должны быть документированы и пригодны для автоматической валидации.
+      metric: machine_readable_contracts
+      target: "supported"
+      priority: must
