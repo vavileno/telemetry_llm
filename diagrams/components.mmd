@@ -1,0 +1,74 @@
+flowchart LR
+    %% Компонентное представление: элементы внутри subgraph — модули контейнера,
+    %% а не отдельные сервисы. Межконтейнерные зависимости обозначены пунктиром.
+    subgraph Ingestion["Ingestion Service"]
+        Receive["Приём пакетов"] --> AuthSource["Аутентификация и проверка источника"]
+        AuthSource --> Validate["Валидация меток и лимитов"]
+        Validate --> PublishRaw["Публикация с подтверждением"]
+    end
+
+    subgraph Processing["Processing Service"]
+        Normalize["Нормализация и идентичность ряда"] --> Window["Оконная агрегация / event time"]
+        Normalize --> Quarantine["Изоляция ошибочных данных"]
+        Window --> PublishProcessed["Публикация результатов"]
+    end
+
+    subgraph Alerting["Alerting Service"]
+        Rules["Снимок активных правил"] --> Evaluate["Оценка и переходы состояний"]
+        Evaluate --> PersistAlert["Alert + AlertEvent + outbox транзакционно"]
+    end
+
+    subgraph Storage["Storage Writer"]
+        Consume["Чтение и дедупликация"] --> Batch["Пакетная запись истории"]
+        Consume --> Latest["Условное обновление latest"]
+    end
+
+    subgraph QueryService["Query Service"]
+        CheckQuery["Авторизация и проверка лимитов"] --> Plan["План по диапазону"]
+        Plan --> Merge["Слияние, сортировка, пагинация"]
+    end
+
+    subgraph ControlService["Control Service"]
+        AdminAuth["Административные права / аудит"] --> Config["Источники, определения, политики и правила"]
+        AdminAuth --> Manual["Ручной сброс алерта"]
+        AdminAuth --> Jobs["Задания replay и проблемные данные"]
+    end
+
+    Raw[("Kafka raw")]
+    Processed[("Kafka processed")]
+    AlertsStream[("Kafka alerts")]
+    Metadata[("PostgreSQL meta / outbox")]
+    History[("ClickHouse")]
+    Hot[("Redis latest")]
+    Cache[("Redis cache")]
+    Cold[("MinIO")]
+    Dispatcher["Event Dispatcher"]
+    NotificationAdapter["Адаптер внешних событий"]
+    Replay["Replay Worker"]
+    Archive["Archive Worker"]
+
+    PublishRaw -.-> Raw
+    Raw -.-> Normalize
+    Raw -.-> Consume
+    PublishProcessed -.-> Processed
+    Processed -.-> Consume
+    Processed -.-> Evaluate
+    Batch -.-> History
+    Latest -.-> Hot
+    Config -.-> Metadata
+    Config -.-> Rules
+    AuthSource -.-> Metadata
+    Manual -.-> Evaluate
+    PersistAlert -.-> Metadata
+    Metadata -.-> Dispatcher
+    Dispatcher -.-> AlertsStream
+    AlertsStream -.-> NotificationAdapter
+    Jobs -.-> Replay
+    Replay -.-> Raw
+    Plan -.-> Hot
+    Plan -.-> Cache
+    Plan -.-> History
+    Plan -.-> Cold
+    History -.-> Archive
+    Archive -.-> Cold
+    Archive -.-> Metadata

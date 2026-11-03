@@ -1,1 +1,56 @@
+flowchart LR
+    %% Контейнеры — отдельно развёртываемые процессы и хранилища.
+    %% Контракты стрелок проектные; детали событий/API ещё не утверждены.
+    Agents["Агенты и источники телеметрии"]
+    Users["Пользователи / администратор"]
+    Viz["Grafana / внешняя аналитика"]
+    Notify["Внешняя система уведомлений / инцидентов"]
 
+    subgraph Platform["Система телеметрии"]
+        Ingest["Ingestion Service"]
+        Process["Processing Service"]
+        Alerts["Alerting Service"]
+        Writer["Storage Writer"]
+        Query["Query Service"]
+        Control["Control Service"]
+        Replay["Replay Worker"]
+        Archive["Archive Worker"]
+        Dispatcher["Event Dispatcher"]
+        NotificationAdapter["Адаптер внешних событий"]
+        Kafka[("Kafka: durable stream / replay")]
+        PG[("PostgreSQL: конфигурация, алерты, outbox")]
+        RedisLatest[("Redis latest: последнее значение")]
+        RedisCache[("Redis cache: результаты запросов")]
+        CH[("ClickHouse: история и агрегаты")]
+        MinIO[("MinIO: архив Parquet")]
+    end
+
+    Agents -->|метрики| Ingest
+    Ingest -->|raw после фиксации подтверждается приём| Kafka
+    Kafka -->|raw| Process
+    Kafka -->|raw для исторического хранения| Writer
+    Process -->|обработанные точки / агрегаты| Kafka
+    Kafka -->|обработанные точки / агрегаты| Writer
+    Kafka -->|релевантные точки / агрегаты| Alerts
+    Writer --> CH
+    Writer --> RedisLatest
+    Users -->|чтение| Query
+    Viz -->|запросы| Query
+    Query --> RedisLatest
+    Query --> RedisCache
+    Query --> CH
+    Query -->|архивный диапазон| MinIO
+    Users -->|администрирование| Control
+    Control --> PG
+    Control -->|задание replay| Replay
+    Kafka -->|доступный диапазон replay| Replay
+    Replay -->|повторная публикация| Kafka
+    Control -->|ручной сброс| Alerts
+    Alerts -->|состояние и событие транзакционно| PG
+    PG -->|outbox| Dispatcher
+    Dispatcher -->|события алертинга| Kafka
+    Kafka -->|события алертинга| NotificationAdapter
+    NotificationAdapter -->|интеграция| Notify
+    CH -->|архивирование| Archive
+    Archive -->|объекты| MinIO
+    Archive -->|каталог / подтверждение| PG

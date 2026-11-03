@@ -308,6 +308,7 @@ system:
   diagrams:
     context: diagrams/context.mmd
     containers: diagrams/containers.mmd
+    components: diagrams/components.mmd
     sequence_create_order_legacy_name: diagrams/sequence-create-order.mmd
     states:
       TelemetrySource: diagrams/state-telemetry-source.mmd
@@ -326,6 +327,7 @@ system:
     use_cases: docs/03-use-cases.md
     non_functional_requirements: docs/04-non-functional-requirements.md
     architecture: docs/05-architecture.md
+    services: docs/services/README.md
     api: docs/06-api.md
     data_model: docs/07-data-model.md
     ui_ux: docs/08-ui-ux.md
@@ -396,7 +398,7 @@ system:
         - UC-009
 
   open_items:
-    - Заполнить архитектурную спецификацию и контейнерную диаграмму.
+    - Утвердить проектную декомпозицию компонентов и уточнить контракты их взаимодействия в docs/05-architecture.md.
     - Сформировать OpenAPI-контракт.
     - Описать событийные контракты.
     - Описать физическую модель данных после выбора хранилищ.

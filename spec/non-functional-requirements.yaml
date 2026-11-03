@@ -123,6 +123,7 @@ non_functional_requirements:
       metric: retention_policy_granularity
       target: "hot, historical, archive"
       priority: must
+      note: Полные исходные точки хранятся в ClickHouse одни сутки от приёма (при сбое архивации — дольше до проверки полного архива); срок хранения raw в MinIO задаётся отдельно.
 
     - id: NFR-DUR-003
       description: Удаление данных по истечении срока хранения должно быть контролируемым и трассируемым.

@@ -91,10 +91,12 @@ entities:
         required: true
 
   MetricSample:
-    description: Отдельное значение временного ряда в определённый момент времени.
+    description: Отдельное измерение временного ряда; разные точки могут иметь одинаковое время измерения.
     fields:
       id:
         type: UUID
+        required: true
+        description: Стабильный measurementId, созданный агентом для точки; сохраняется при повторной отправке и replay. Не eventId и не correlationId.
       timeSeries:
         type: TimeSeries
         required: true
@@ -115,7 +117,7 @@ entities:
       correlationId:
         type: string
         nullable: true
-        description: Идентификатор для обнаружения повторно переданных измерений.
+        description: Необязательный идентификатор для связывания этапов обработки и диагностики; может быть общим для нескольких измерений. Не определяет идентичность измерения и не служит ключом дедупликации.
 
   AggregationPolicy:
     description: Правило вычисления сводных значений метрики по временным окнам.

@@ -1,1 +1,276 @@
+# Черновик логических контрактов событий; не утверждённая схема Kafka/HTTP.
+# Источники: spec/requirements.yaml, spec/business-rules.yaml, spec/domain.yaml,
+# spec/use-cases.yaml, docs/05-architecture.md, docs/services/*.md.
+specification:
+  id: telemetry-events
+  status: draft
+  version: 0.1.0
+  scope: Внутренний обмен данными между компонентами системы телеметрии.
+  convention: >
+    eventId различает логические события публикации; идентичность точки задаёт
+    measurementId, созданный агентом и сохраняемый при повторе и replay.
+    Примеры иллюстрируют форму и не являются утверждённым wire format.
+  adopted_constraints:
+    - ADR-0001 задаёт надёжный поток данных между этапами обработки.
+    - ADR-0002 выбирает Kafka для транспорта и replay и указывает ориентир retention 7 дней; параметры топиков и подтверждения ещё не определены.
+    - Транзакция Kafka не делает запись в PostgreSQL, Redis и ClickHouse общей атомарной операцией.
+    - BR-011 задаёт стабильный measurementId каждой точки от агента; разные точки одного ряда с одинаковым observedAt не объединяются.
+    - FR-001, BR-030 и UC-001 задают поэлементную атомарность; ответ агенту содержит списки подтверждённых и неподтверждённых точек (включая неизвестный исход записи), успех подтверждается только после надёжной фиксации.
+    - ADR-0002 и FR-013 задают хранение полного raw в ClickHouse одни сутки от receivedAt, затем в MinIO; удаление из ClickHouse только после проверенного RAW_SAMPLES-архива.
+  not_in_scope:
+    - HTTP-запрос на приём метрик и результат приёма пакета — будущий OpenAPI.
+    - Команда ручного сброса алерта — запрос на действие, а не событие о факте.
+    - Записи outbox и ProcessingFailure — внутренние модели; контракт их публикации пока не выбран.
 
+# Общая оболочка — проектное предложение, проверяемое валидатором после выбора
+# JSON Schema / Avro / Protobuf и утверждения кодирования значений и времени.
+envelope:
+  status: proposed
+  fields:
+    eventType:
+      type: string
+      required: true
+      meaning: Имя типа события из каталога ниже.
+    schemaVersion:
+      type: integer
+      required: true
+      meaning: Версия схемы конкретного типа события; версия 1 в примерах предварительна.
+    eventId:
+      type: UUID
+      required: true
+      meaning: Идентификатор логического события; повторная публикация той же записи сохраняет его. Не идентификатор измерения.
+    emittedAt:
+      type: datetime_utc
+      required: true
+      meaning: Время формирования сообщения отправителем, не время измерения.
+    correlationId:
+      type: string
+      required: false
+      meaning: Диагностическая связь обработки между этапами; не является идентификатором точки и не ключ дедупликации.
+    payload:
+      type: object
+      required: true
+      meaning: Поля события соответствующего типа.
+  unresolved_wire_details:
+    - Формат timestamp и точность; кодирование decimal и допустимый числовой диапазон.
+    - Формат UUID, сериализация nullable-полей и правила совместимости версий.
+
+events:
+  - name: MetricAccepted
+    status: draft
+    meaning: Валидная исходная точка принята и устойчиво зафиксирована для обработки; это не означает сохранения в ClickHouse или доступности latest.
+    occurrence: Запись этого сообщения в надёжный буфер после проверки; приём подтверждается клиенту только после устойчивой фиксации записи.
+    producer: Ingestion Service
+    consumers:
+      - Processing Service
+      - Storage Writer
+      - Replay Worker
+    stream_candidate: metrics.raw
+    ordering_scope: Точки одного ряда желательно упорядочивать; ключ партиционирования пока не утверждён.
+    requirements: [FR-001, FR-002, FR-003, FR-004, FR-005, FR-017, FR-022]
+    rules: [BR-002, BR-003, BR-004, BR-005, BR-008, BR-011, BR-029, BR-030]
+    use_cases: [UC-001, UC-008]
+    payload:
+      measurementId: {type: UUID, required: true, meaning: Стабильный ID точки от агента; сохраняется при повторной отправке и replay, не eventId.}
+      sourceId: {type: UUID, required: true, meaning: Зарегистрированный источник; не учётные данные отправителя.}
+      metricDefinitionId: {type: UUID, required: true, meaning: Определение метрики, распознанное при валидации.}
+      metricName: {type: string, required: true, meaning: Исходное имя без нормализации.}
+      value: {type: decimal, required: true, meaning: Исходное числовое значение без преобразования единиц.}
+      observedAt: {type: datetime_utc, required: true, meaning: Время измерения на источнике.}
+      receivedAt: {type: datetime_utc, required: true, meaning: Время приёма системой.}
+      labels: {type: 'map<string, string>', required: true, meaning: Исходные пользовательские метки, в том числе пустая карта.}
+      unit: {type: string, required: false, meaning: Единица, если передана источником; способ передачи пока не определён.}
+    invariants:
+      - Повтор агента может создать новое событие с другим eventId, но measurementId остаётся прежним; разные точки с одинаковым observedAt имеют разные measurementId.
+      - Отказ другой точки того же пакета не отменяет это событие; его успешная фиксация подтверждается по measurementId.
+      - Исходные имя, значение, время измерения, источник и метки не меняются содержательно.
+      - Неизвестный, отключённый или чужой источник не порождает MetricAccepted.
+      - При ошибке надёжной фиксации успешный приём не подтверждается.
+    example:
+      eventType: MetricAccepted
+      schemaVersion: 1
+      eventId: 8313602f-4e39-4d5d-8366-4f3d99297d2a
+      emittedAt: '2026-01-20T12:00:00.120Z'
+      payload:
+        measurementId: 0a44ed70-8325-4b14-a738-e826c98ba812
+        sourceId: a36580ae-c311-4caa-b56a-c2eca5bb8884
+        metricDefinitionId: c1a11f67-929b-42c0-8506-7fbf5875b5a2
+        metricName: cpu_usage_percent
+        value: 23.4
+        observedAt: '2026-01-20T12:00:00Z'
+        receivedAt: '2026-01-20T12:00:00.100Z'
+        labels: {core: '0', environment: production}
+    unresolved: [EVQ-005, EVQ-006, EVQ-008, EVQ-009]
+
+  - name: MetricNormalized
+    status: draft
+    meaning: Результат нормализации принятой точки для дальнейшей обработки; не заменяет неизменный исходник.
+    occurrence: После нормализации имени, единиц и служебных меток либо оценки качества точки.
+    producer: Processing Service
+    consumers:
+      - Storage Writer
+      - Alerting Service
+    stream_candidate: metrics.normalized
+    ordering_scope: Временной ряд (metricDefinitionId + sourceId + нормализованные labels).
+    requirements: [FR-006, FR-011, FR-012]
+    rules: [BR-006, BR-007, BR-008, BR-009, BR-010, BR-011]
+    use_cases: [UC-001, UC-006]
+    payload:
+      measurementId: {type: UUID, required: true, meaning: ID исходной точки от агента; сохраняется при нормализации и replay.}
+      sourceEventId: {type: UUID, required: true, meaning: Ссылка на опубликованное MetricAccepted.}
+      sourceId: {type: UUID, required: true, meaning: Зарегистрированный источник.}
+      metricDefinitionId: {type: UUID, required: true, meaning: Нормализованное определение метрики.}
+      metricName: {type: string, required: true, meaning: Каноническое имя метрики.}
+      timeSeriesFingerprint: {type: string, required: true, meaning: Идентичность ряда по BR-009, не идентичность измерения.}
+      value: {type: decimal, required: true, meaning: Значение в канонических единицах.}
+      observedAt: {type: datetime_utc, required: true, meaning: Исходное время измерения.}
+      receivedAt: {type: datetime_utc, required: true, meaning: Исходное время приёма.}
+      labels: {type: 'map<string, string>', required: true, meaning: Нормализованные метки, включая добавленные служебные.}
+      quality: {type: SampleQuality, required: true, values: [VALID, LATE, SUSPECT]}
+    invariants:
+      - Доменная идентичность результата нормализации определяется measurementId, а не sourceEventId или correlationId.
+      - Полная исходная точка доступна из ClickHouse в суточном окне и из проверенного MinIO-архива в пределах его срока хранения; агрегаты не заменяют исходник.
+      - Более старая или SUSPECT точка не заменяет последнее валидное значение без разрешённой обработки.
+      - Повторная обработка исходного измерения не создаёт отличающийся доменный результат.
+    example:
+      eventType: MetricNormalized
+      schemaVersion: 1
+      eventId: 8d75af70-850f-475e-9ecd-e4b540b0b9fa
+      emittedAt: '2026-01-20T12:00:00.300Z'
+      payload:
+        measurementId: 0a44ed70-8325-4b14-a738-e826c98ba812
+        sourceEventId: 8313602f-4e39-4d5d-8366-4f3d99297d2a
+        sourceId: a36580ae-c311-4caa-b56a-c2eca5bb8884
+        metricDefinitionId: c1a11f67-929b-42c0-8506-7fbf5875b5a2
+        metricName: cpu_usage_percent
+        timeSeriesFingerprint: 'example-fingerprint-not-a-hash-specification'
+        value: 23.4
+        observedAt: '2026-01-20T12:00:00Z'
+        receivedAt: '2026-01-20T12:00:00.100Z'
+        labels: {core: '0', environment: production}
+        quality: VALID
+    unresolved: [EVQ-005, EVQ-006, EVQ-008, EVQ-009]
+
+  - name: MetricAggregateCalculated
+    status: draft
+    meaning: Итог применения политики агрегации к исходным данным за временное окно.
+    occurrence: Когда результат окна рассчитан по выбранной политике и может быть сохранён и запрошен.
+    producer: Processing Service
+    consumers:
+      - Storage Writer
+      - Alerting Service
+    stream_candidates: [metrics.1s, metrics.1m]
+    ordering_scope: Политика, группа (источник и метки), функция и окно; маршрутизация требует решения.
+    requirements: [FR-007, FR-008, FR-012]
+    rules: [BR-011, BR-012, BR-013, BR-014]
+    use_cases: [UC-003, UC-006]
+    payload:
+      policyId: {type: UUID, required: true, meaning: Политика расчёта.}
+      metricDefinitionId: {type: UUID, required: true, meaning: Агрегируемая метрика.}
+      sourceId: {type: UUID, required: false, nullable: true, meaning: Отсутствует при агрегации по нескольким источникам.}
+      labels: {type: 'map<string, string>', required: true, meaning: Метки группировки; пустая карта допустима.}
+      function: {type: AggregationFunction, required: true, values: [COUNT, SUM, AVG, MIN, MAX, P50, P95, P99]}
+      value: {type: decimal, required: true, meaning: Результат функции.}
+      sampleCount: {type: integer, required: true, constraint: '> 0'}
+      windowStartedAt: {type: datetime_utc, required: true}
+      windowEndedAt: {type: datetime_utc, required: true}
+      calculatedAt: {type: datetime_utc, required: true}
+    invariants:
+      - Начало окна предшествует окончанию, число точек положительно.
+      - При replay одинаковых исходных данных получается тот же доменный результат.
+      - Окна задаются AggregationPolicy, а не ограничены двумя рабочими именами топиков.
+    example:
+      eventType: MetricAggregateCalculated
+      schemaVersion: 1
+      eventId: 5c331509-ce87-4ecf-9212-9d6289373cdc
+      emittedAt: '2026-01-20T12:01:01Z'
+      payload:
+        policyId: f84b2712-6d1c-45ee-abec-afaf3e59fc11
+        metricDefinitionId: c1a11f67-929b-42c0-8506-7fbf5875b5a2
+        sourceId: a36580ae-c311-4caa-b56a-c2eca5bb8884
+        labels: {environment: production}
+        function: AVG
+        value: 23.4
+        sampleCount: 3
+        windowStartedAt: '2026-01-20T12:00:00Z'
+        windowEndedAt: '2026-01-20T12:01:00Z'
+        calculatedAt: '2026-01-20T12:01:00.900Z'
+    unresolved: [EVQ-005, EVQ-006]
+
+  - name: AlertStateChanged
+    status: draft
+    meaning: Сохранённый факт перехода конкретного алерта между состояниями.
+    occurrence: Только при фактическом изменении состояния Alert, включая восстановление и ручной сброс.
+    producer: Alerting Service
+    publication_path: PostgreSQL outbox -> Event Dispatcher -> Kafka
+    consumers:
+      - Адаптер внешних событий
+    stream_candidate: alerts
+    ordering_scope: alertId
+    requirements: [FR-010, FR-023]
+    rules: [BR-011, BR-016, BR-017, BR-018, BR-019, BR-024, BR-032]
+    use_cases: [UC-006, UC-009]
+    payload:
+      alertId: {type: UUID, required: true}
+      ruleId: {type: UUID, required: true}
+      sourceId: {type: UUID, required: false, nullable: true, meaning: Может отсутствовать у агрегата нескольких источников.}
+      labels: {type: 'map<string, string>', required: true, meaning: Метки данного алерта.}
+      previousState: {type: AlertState, required: false, nullable: true, values: [NORMAL, PENDING, FIRING, RESOLVED]}
+      newState: {type: AlertState, required: true, values: [NORMAL, PENDING, FIRING, RESOLVED]}
+      value: {type: decimal, required: false, nullable: true, meaning: Значение, использованное при оценке, если оно было.}
+      occurredAt: {type: datetime_utc, required: true, meaning: Время перехода состояния, а не время доставки.}
+      context: {type: 'map<string, string>', required: false, meaning: Контекст метрики или ручного действия; при ручном сбросе нужен идентификатор инициатора.}
+    invariants:
+      - При отсутствии перехода доменное событие не создаётся.
+      - Изменение Alert, AlertEvent и запись outbox сохраняются в одной транзакции PostgreSQL; при ошибке все три откатываются.
+      - eventId равен AlertEvent.id, назначается при создании перехода и не меняется при повторной публикации из outbox.
+      - Ручной сброс допускает переход FIRING -> RESOLVED без изменения правила.
+      - При ручном сбросе контекст содержит идентификатор инициатора.
+      - Для повторной доставки сохраняется тот же eventId; потребитель не должен повторять доменный эффект.
+      - Подтверждение сброса администратору требует фиксации Alert, AlertEvent и outbox, но не публикации в Kafka или доставки внешнему получателю.
+    example:
+      eventType: AlertStateChanged
+      schemaVersion: 1
+      eventId: 9c332f70-918a-4421-90b4-7c87673ebebd
+      emittedAt: '2026-01-20T12:02:03Z'
+      payload:
+        alertId: 9012f6ca-61dc-4649-8cd5-7578c14df831
+        ruleId: 63635a2a-fd47-4122-a23f-43d1469ee381
+        labels: {environment: production}
+        previousState: FIRING
+        newState: RESOLVED
+        occurredAt: '2026-01-20T12:02:02Z'
+        context: {initiatorId: admin-123}
+    unresolved: [EVQ-005, EVQ-006, EVQ-007]
+
+# Нерешённые вопросы — это НЕ принятые гарантийные условия.
+open_questions:
+  - id: EVQ-005
+    decision: Утвердить форматы wire, кодирование decimal и UTC-времени, nullable, версионирование и правила совместимости схем.
+    impact: До принятия решения примеры в этом файле не являются исполняемой схемой.
+    verification: Producer и consumer проходят автоматическую проверку схемы и совместимости двух версий.
+    source: [NFR-COMP-002, NFR-COMP-003]
+
+  - id: EVQ-006
+    decision: Утвердить Kafka-топологию, ключи партиционирования, подтверждения, границы повтора и политику изоляции ошибок; проверить достаточность 7-дневного retention из ADR-0002 для каждого потока.
+    impact: stream_candidate — рабочие имена, транзакция Kafka не делает записи Redis/ClickHouse/PostgreSQL атомарными; задержка downstream ограничена retention.
+    verification: При отказе узла после подтверждения и при повторной доставке данные доступны, а доменный результат не дублируется.
+    source: [FR-004, FR-005, FR-017, FR-018, NFR-REL-001, NFR-REL-004]
+
+  - id: EVQ-007
+    decision: Определить идентичность перехода алерта при гонке ручного сброса и автоматической оценки, политику отсутствия данных и повторного срабатывания.
+    impact: Уникальность AlertStateChanged, допустимые переходы и дедупликация при replay.
+    verification: Одновременные сброс и автоматическая оценка не сохраняют два противоречащих события; отсутствие изменения состояния не создаёт событие.
+    source: [BR-016, BR-017, BR-018, FR-023]
+
+  - id: EVQ-008
+    decision: Определить реакцию на повтор одного measurementId с изменённым содержимым и способ проверки конфликтов на входе и при replay.
+    impact: Без этого нельзя утвердить ответ агента о конфликте; молчаливая замена исходного измерения запрещена BR-005. Дедупликация ClickHouse требует отдельного механизма.
+    verification: Повтор с тем же ID и прежним содержимым не создаёт вторую доменную точку; изменение содержимого не перезаписывает первую.
+    source: [BR-005, BR-011, FR-012, FR-017]
+
+  - id: EVQ-009
+    decision: Определить срок хранения полного raw-архива в MinIO и формат точного представления исходного значения и меток (если нужен побайтовый оригинал), разбиение и процедуру чтения файлов.
+    impact: Стоимость долгого хранения, точность восстановления исходной точки и доступность replay после истечения Kafka retention.
+    verification: По measurementId точка читается из архива после удаления из ClickHouse; срок и точность восстановления соответствуют согласованной политике.
+    source: [FR-004, FR-012, FR-013, FR-017]
