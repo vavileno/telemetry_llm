@@ -104,9 +104,11 @@ system:
       related_requirements:
         - FR-009
         - FR-010
+        - FR-023
       related_use_cases:
         - UC-005
         - UC-006
+        - UC-009
     - id: CAP-005
       name: Хранение данных
       related_requirements:
@@ -172,7 +174,7 @@ system:
 
   functional_requirements:
     source: spec/requirements.yaml
-    total: 22
+    total: 23
     groups:
       ingestion:
         - FR-001
@@ -187,6 +189,7 @@ system:
       alerting:
         - FR-009
         - FR-010
+        - FR-023
       storage:
         - FR-011
         - FR-012
@@ -263,6 +266,8 @@ system:
         name: Контроль состояния конвейера
       - id: UC-008
         name: Повторная обработка данных
+      - id: UC-009
+        name: Ручной сброс алерта
 
   data_flow:
     description: Логический поток обработки телеметрии без фиксации конкретных технологий.
@@ -362,6 +367,7 @@ system:
         - UC-005
       FR-010:
         - UC-006
+        - UC-009
       FR-011:
         - UC-002
       FR-014:
@@ -385,6 +391,9 @@ system:
         - UC-005
         - UC-007
         - UC-008
+        - UC-009
+      FR-023:
+        - UC-009
 
   open_items:
     - Заполнить архитектурную спецификацию и контейнерную диаграмму.
