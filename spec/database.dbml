@@ -235,7 +235,7 @@ Table meta.metric_definition_allowed_label {
 Table meta.aggregation_policy {
   id uuid [pk]
   metric_definition_id uuid [not null]
-  window_seconds bigint [not null, check: `window_seconds > 0`, note: 'BR-012: окно положительной длительности']
+  window_seconds bigint [not null, check: `window_seconds IN (60, 300, 3600)`, note: 'BR-012: поддерживаемые окна 1m, 5m, 1h; не срок хранения']
   status policy_status [not null, note: 'BR-013: неактивная политика хранится до исправления настроек']
   created_at timestamp [not null]
   updated_at timestamp [not null]
@@ -276,6 +276,7 @@ Table meta.alert_rule {
   threshold decimal(38, 12) [not null]
   evaluation_window_seconds bigint [not null]
   pending_period_seconds bigint [not null]
+  manual_reset_suppression_period_seconds bigint [not null, note: '> 0; настраиваемый период подавления повторного срабатывания (BR-035)']
   severity alert_severity [not null]
   status rule_status [not null, note: 'BR-016: DISABLED не участвует в оценке, BR-015: ACTIVE требует полной конфигурации']
   created_by_id varchar [not null]
@@ -286,6 +287,9 @@ Table meta.alert_rule {
 
   indexes {
     (status, metric_definition_id) [name: 'ix_rule_status_metric']
+  }
+  checks {
+    `manual_reset_suppression_period_seconds > 0` [name: 'chk_rule_suppression_period']
   }
   note: 'Поле label_selector вынесено в meta.alert_rule_label_selector. ActorReference разложен в created_by_*. spec/domain.yaml: AlertRule.'
 }
@@ -312,11 +316,12 @@ Table meta.alert {
   started_at timestamp [not null]
   state_changed_at timestamp [not null]
   resolved_at timestamp
+  suppressed_until timestamp [note: 'срок подавления после ручного сброса, фиксируется вместе с переходом FIRING -> RESOLVED (BR-035)']
 
   indexes {
     (alert_rule_id, labels_fingerprint) [unique, note: 'одна строка состояния на правило и набор меток; история — в alert_event']
   }
-  note: 'spec/domain.yaml: Alert. Допустимые переходы BR-017: NORMAL -> PENDING -> FIRING -> RESOLVED -> NORMAL.'
+  note: 'spec/domain.yaml: Alert. Переходы по BR-017, сериализация изменений одного Alert в PostgreSQL по BR-032; suppressed_until не создаёт отдельный AlertEvent.'
 }
 
 // tech. Словарь Alert.labels (map<string, string>).
@@ -469,7 +474,7 @@ Table ts.metric_sample {
     (time_series_id, observed_at) [name: 'ix_sample_series_time', note: 'запросы по времени; разные measurementId могут иметь одинаковый observed_at']
     (observed_at) [name: 'ix_sample_observed_at', note: 'FR-015: выборки по периоду']
   }
-  note: 'Полные исходные точки. ClickHouse: проектный ORDER BY (time_series_id, observed_at, id); целевое окно 1 сутки от received_at. Не применять безусловный TTL: удалять только после проверенного RAW_SAMPLES-архива в MinIO; при сбое архивирования удерживать точки дольше суток. PARTITION BY и механизм выборочного удаления/дедупликации требуют проектирования. PK id логический, немедленную дедупликацию ClickHouse не гарантирует (ADR-0002).'
+  note: 'Полные исходные точки. Запись из metrics.raw допускается только после проверки measurementId и исходного содержимого по BR-033; PK id логический и не обеспечивает эту проверку в ClickHouse. Проектный ORDER BY (time_series_id, observed_at, id); целевое окно 1 сутки от received_at. Не применять безусловный TTL: удалять только после проверенного RAW_SAMPLES-архива в MinIO; при сбое архивирования удерживать точки дольше суток. PARTITION BY и механизм выборочного удаления/дедупликации требуют проектирования (ADR-0002).'
 }
 
 // MetricAggregate: сводное значение метрики за временное окно.
@@ -482,6 +487,7 @@ Table ts.metric_aggregate {
   labels map(varchar, varchar) [not null]
   aggregation_function aggregation_function [not null, note: 'domain.yaml: MetricAggregate.function']
   value decimal(38, 12) [not null]
+  sum decimal(38, 12) [note: 'BR-037: обязательна только для AVG; для SUM сумма уже находится в value']
   sample_count integer [not null]
   window_started_at timestamp [not null]
   window_ended_at timestamp [not null]
@@ -494,10 +500,12 @@ Table ts.metric_aggregate {
   checks {
     // BR-014: агрегат без исходных данных не существует
     `sample_count > 0` [name: 'chk_aggregate_sample_count']
+    // BR-037: промежуточная сумма нужна только для AVG
+    `(aggregation_function = 'AVG' AND sum IS NOT NULL) OR (aggregation_function <> 'AVG' AND sum IS NULL)` [name: 'chk_aggregate_avg_sum']
     // BR-012, INV-002: начало окна предшествует окончанию
     `window_started_at < window_ended_at` [name: 'chk_aggregate_window']
   }
-  note: 'ClickHouse: ReplacingMergeTree, TTL 30 дней для 1s-агрегатов, шардирование по cityHash64(fingerprint) (ADR-0002).'
+  note: 'ClickHouse: ReplacingMergeTree, шардирование по cityHash64(fingerprint) (ADR-0002). Поддерживаемые окна 1m/5m/1h (FR-007, BR-012); сроки их хранения пока не заданы. Упомянутый в ADR-0002 TTL 30 дней для прежнего проектного уровня 1s не является политикой хранения выбранных окон.'
 }
 
 

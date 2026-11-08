@@ -1,4 +1,4 @@
-# Черновик логических контрактов событий; не утверждённая схема Kafka/HTTP.
+# Черновик логических контрактов событий; внутренний транспорт Avro (ADR-0004), но исполняемые схемы ещё не утверждены.
 # Источники: spec/requirements.yaml, spec/business-rules.yaml, spec/domain.yaml,
 # spec/use-cases.yaml, docs/05-architecture.md, docs/services/*.md.
 specification:
@@ -17,13 +17,23 @@ specification:
     - BR-011 задаёт стабильный measurementId каждой точки от агента; разные точки одного ряда с одинаковым observedAt не объединяются.
     - FR-001, BR-030 и UC-001 задают поэлементную атомарность; ответ агенту содержит списки подтверждённых и неподтверждённых точек (включая неизвестный исход записи), успех подтверждается только после надёжной фиксации.
     - ADR-0002 и FR-013 задают хранение полного raw в ClickHouse одни сутки от receivedAt, затем в MinIO; удаление из ClickHouse только после проверенного RAW_SAMPLES-архива.
+    - ADR-0004 выбирает Avro для внутренних Kafka-событий, Apicurio Registry и BACKWARD_TRANSITIVE для версий схем каждого типа.
+    - BR-033 требует проверять конфликт measurementId при последующей обработке до доменных эффектов; подтверждение MetricAccepted означает фиксацию в Kafka, не успешную запись истории.
+    - ADR-0005 задаёт логические ключи партиционирования raw по measurementId, нормализованной точки по ряду, агрегата по политике/группе и события алерта по alertId.
+  serialization:
+    format: Avro
+    registry: Apicurio Registry (self-hosted)
+    schema_scope: Отдельная версионируемая схема для каждого типа события.
+    schema_identification: Каждая запись Kafka содержит ID зарегистрированной схемы; точное бинарное framing ещё не утверждено.
+    compatibility: BACKWARD_TRANSITIVE
+    compatibility_scope: Для каждой схемы типа события отдельно.
+    lifecycle: Исходники .avsc в репозитории, проверка схем и совместимости в CI, регистрация до запуска отправителей при развёртывании, кэширование схем в сервисах.
   not_in_scope:
     - HTTP-запрос на приём метрик и результат приёма пакета — будущий OpenAPI.
     - Команда ручного сброса алерта — запрос на действие, а не событие о факте.
     - Записи outbox и ProcessingFailure — внутренние модели; контракт их публикации пока не выбран.
 
-# Общая оболочка — проектное предложение, проверяемое валидатором после выбора
-# JSON Schema / Avro / Protobuf и утверждения кодирования значений и времени.
+# Общая логическая оболочка; физическая структура Avro и кодирование полей ещё не утверждены.
 envelope:
   status: proposed
   fields:
@@ -34,7 +44,7 @@ envelope:
     schemaVersion:
       type: integer
       required: true
-      meaning: Версия схемы конкретного типа события; версия 1 в примерах предварительна.
+      meaning: Логическая версия схемы конкретного типа события в примерах; для декодирования используется ID схемы из записи Kafka, не только это поле.
     eventId:
       type: UUID
       required: true
@@ -53,7 +63,8 @@ envelope:
       meaning: Поля события соответствующего типа.
   unresolved_wire_details:
     - Формат timestamp и точность; кодирование decimal и допустимый числовой диапазон.
-    - Формат UUID, сериализация nullable-полей и правила совместимости версий.
+    - Формат UUID, сериализация nullable-полей и точный бинарный framing ID схемы в Kafka.
+    - Исполняемые .avsc, правила развёртывания разных версий producer/consumer и поведение при недоступности реестра без нужной схемы в кэше.
 
 events:
   - name: MetricAccepted
@@ -66,9 +77,10 @@ events:
       - Storage Writer
       - Replay Worker
     stream_candidate: metrics.raw
-    ordering_scope: Точки одного ряда желательно упорядочивать; ключ партиционирования пока не утверждён.
+    partition_key: {fields: [measurementId], meaning: Повторы и конфликтующие версии одной точки направляются в одну партицию; Kafka сама не выполняет дедупликацию.}
+    ordering_scope: Публикации одного measurementId в одной партиции; порядок точек ряда не гарантирован этим ключом.
     requirements: [FR-001, FR-002, FR-003, FR-004, FR-005, FR-017, FR-022]
-    rules: [BR-002, BR-003, BR-004, BR-005, BR-008, BR-011, BR-029, BR-030]
+    rules: [BR-002, BR-003, BR-004, BR-005, BR-008, BR-011, BR-029, BR-030, BR-033]
     use_cases: [UC-001, UC-008]
     payload:
       measurementId: {type: UUID, required: true, meaning: Стабильный ID точки от агента; сохраняется при повторной отправке и replay, не eventId.}
@@ -86,6 +98,7 @@ events:
       - Исходные имя, значение, время измерения, источник и метки не меняются содержательно.
       - Неизвестный, отключённый или чужой источник не порождает MetricAccepted.
       - При ошибке надёжной фиксации успешный приём не подтверждается.
+      - Конфликт того же measurementId с другим исходным содержимым может быть обнаружен после подтверждения агенту; это событие остаётся фактом записи в Kafka, но конфликтующая точка не создаёт доменного результата.
     example:
       eventType: MetricAccepted
       schemaVersion: 1
@@ -100,7 +113,7 @@ events:
         observedAt: '2026-01-20T12:00:00Z'
         receivedAt: '2026-01-20T12:00:00.100Z'
         labels: {core: '0', environment: production}
-    unresolved: [EVQ-005, EVQ-006, EVQ-008, EVQ-009]
+    unresolved: [EVQ-005, EVQ-006, EVQ-009, EVQ-010, EVQ-011]
 
   - name: MetricNormalized
     status: draft
@@ -111,9 +124,10 @@ events:
       - Storage Writer
       - Alerting Service
     stream_candidate: metrics.normalized
+    partition_key: {fields: [timeSeriesFingerprint], meaning: Fingerprint ряда из определения метрики, источника и нормализованных меток по BR-009.}
     ordering_scope: Временной ряд (metricDefinitionId + sourceId + нормализованные labels).
     requirements: [FR-006, FR-011, FR-012]
-    rules: [BR-006, BR-007, BR-008, BR-009, BR-010, BR-011]
+    rules: [BR-006, BR-007, BR-008, BR-009, BR-010, BR-011, BR-033]
     use_cases: [UC-001, UC-006]
     payload:
       measurementId: {type: UUID, required: true, meaning: ID исходной точки от агента; сохраняется при нормализации и replay.}
@@ -132,6 +146,8 @@ events:
       - Полная исходная точка доступна из ClickHouse в суточном окне и из проверенного MinIO-архива в пределах его срока хранения; агрегаты не заменяют исходник.
       - Более старая или SUSPECT точка не заменяет последнее валидное значение без разрешённой обработки.
       - Повторная обработка исходного измерения не создаёт отличающийся доменный результат.
+      - При конфликте measurementId с исходным содержимым MetricNormalized не публикуется для конфликтующей версии; причина сохраняется как ProcessingFailure.
+      - Результаты replay исходных точек не передаются в контур изменения состояния Alert; способ отличить их от live-оценки ещё требует согласования (EVQ-011).
     example:
       eventType: MetricNormalized
       schemaVersion: 1
@@ -149,7 +165,7 @@ events:
         receivedAt: '2026-01-20T12:00:00.100Z'
         labels: {core: '0', environment: production}
         quality: VALID
-    unresolved: [EVQ-005, EVQ-006, EVQ-008, EVQ-009]
+    unresolved: [EVQ-005, EVQ-006, EVQ-009, EVQ-010, EVQ-011]
 
   - name: MetricAggregateCalculated
     status: draft
@@ -159,10 +175,12 @@ events:
     consumers:
       - Storage Writer
       - Alerting Service
-    stream_candidates: [metrics.1s, metrics.1m]
-    ordering_scope: Политика, группа (источник и метки), функция и окно; маршрутизация требует решения.
+    stream_candidates: [metrics.1m]
+    stream_note: Имя потока проектное; окна 1m/5m/1h заданы политикой, а маршрутизация агрегатов этих окон по потокам ещё не утверждена (EVQ-006).
+    partition_key: {fields: [policyId, metricDefinitionId, sourceId, labels], meaning: Политика и нормализованная группа агрегации; способ кодирования nullable sourceId и меток ещё не утверждён.}
+    ordering_scope: Политика и группа агрегации; функция и окно не входят в ключ.
     requirements: [FR-007, FR-008, FR-012]
-    rules: [BR-011, BR-012, BR-013, BR-014]
+    rules: [BR-011, BR-012, BR-013, BR-014, BR-037]
     use_cases: [UC-003, UC-006]
     payload:
       policyId: {type: UUID, required: true, meaning: Политика расчёта.}
@@ -171,14 +189,17 @@ events:
       labels: {type: 'map<string, string>', required: true, meaning: Метки группировки; пустая карта допустима.}
       function: {type: AggregationFunction, required: true, values: [COUNT, SUM, AVG, MIN, MAX, P50, P95, P99]}
       value: {type: decimal, required: true, meaning: Результат функции.}
+      sum: {type: decimal, required: false, nullable: true, meaning: Обязательная сумма исходных значений для AVG; для остальных функций отсутствует (BR-037).}
       sampleCount: {type: integer, required: true, constraint: '> 0'}
       windowStartedAt: {type: datetime_utc, required: true}
       windowEndedAt: {type: datetime_utc, required: true}
       calculatedAt: {type: datetime_utc, required: true}
     invariants:
       - Начало окна предшествует окончанию, число точек положительно.
+      - Для AVG sum обязателен, value вычисляется как sum / sampleCount; для остальных функций sum отсутствует (BR-037).
       - При replay одинаковых исходных данных получается тот же доменный результат.
-      - Окна задаются AggregationPolicy, а не ограничены двумя рабочими именами топиков.
+      - Агрегат, пересчитанный в replay, не инициирует изменения Alert или новых AlertStateChanged (BR-036).
+      - Поддерживаются окна AggregationPolicy длительностью 60, 300 и 3600 секунд; имена потоков не определяют допустимые окна или сроки хранения.
     example:
       eventType: MetricAggregateCalculated
       schemaVersion: 1
@@ -191,11 +212,12 @@ events:
         labels: {environment: production}
         function: AVG
         value: 23.4
+        sum: 70.2
         sampleCount: 3
         windowStartedAt: '2026-01-20T12:00:00Z'
         windowEndedAt: '2026-01-20T12:01:00Z'
         calculatedAt: '2026-01-20T12:01:00.900Z'
-    unresolved: [EVQ-005, EVQ-006]
+    unresolved: [EVQ-005, EVQ-006, EVQ-011]
 
   - name: AlertStateChanged
     status: draft
@@ -206,9 +228,10 @@ events:
     consumers:
       - Адаптер внешних событий
     stream_candidate: alerts
+    partition_key: {fields: [alertId], meaning: События одного алерта направляются в одну партицию.}
     ordering_scope: alertId
     requirements: [FR-010, FR-023]
-    rules: [BR-011, BR-016, BR-017, BR-018, BR-019, BR-024, BR-032]
+    rules: [BR-011, BR-016, BR-017, BR-018, BR-019, BR-024, BR-032, BR-034, BR-035, BR-036]
     use_cases: [UC-006, UC-009]
     payload:
       alertId: {type: UUID, required: true}
@@ -222,6 +245,9 @@ events:
       context: {type: 'map<string, string>', required: false, meaning: Контекст метрики или ручного действия; при ручном сбросе нужен идентификатор инициатора.}
     invariants:
       - При отсутствии перехода доменное событие не создаётся.
+      - Изменения одного Alert сериализуются под блокировкой его строки; актуальное состояние повторно проверяется до решения о переходе.
+      - Отсутствие новых данных не создаёт переход к RESOLVED; replay исторических метрик не создаёт и не исправляет AlertEvent.
+      - После ручного сброса повторное срабатывание подавлено до suppressedUntil; окончание срока само по себе не создаёт AlertStateChanged.
       - Изменение Alert, AlertEvent и запись outbox сохраняются в одной транзакции PostgreSQL; при ошибке все три откатываются.
       - eventId равен AlertEvent.id, назначается при создании перехода и не меняется при повторной публикации из outbox.
       - Ручной сброс допускает переход FIRING -> RESOLVED без изменения правила.
@@ -241,36 +267,36 @@ events:
         newState: RESOLVED
         occurredAt: '2026-01-20T12:02:02Z'
         context: {initiatorId: admin-123}
-    unresolved: [EVQ-005, EVQ-006, EVQ-007]
+    unresolved: [EVQ-005, EVQ-006, EVQ-011]
 
 # Нерешённые вопросы — это НЕ принятые гарантийные условия.
 open_questions:
   - id: EVQ-005
-    decision: Утвердить форматы wire, кодирование decimal и UTC-времени, nullable, версионирование и правила совместимости схем.
-    impact: До принятия решения примеры в этом файле не являются исполняемой схемой.
-    verification: Producer и consumer проходят автоматическую проверку схемы и совместимости двух версий.
+    decision: При выбранных Avro, Apicurio Registry и BACKWARD_TRANSITIVE утвердить исполняемые .avsc, бинарный framing ID схемы, кодирование UUID, decimal, UTC-времени и nullable, порядок обновления producer/consumer и работу при недоступном реестре.
+    impact: Пока формат отдельных полей и framing не утверждены, примеры в этом файле не являются исполняемой схемой; BACKWARD_TRANSITIVE не гарантирует чтение новых сообщений старым потребителем.
+    verification: CI проверяет каждую .avsc и совместимость со всеми прежними версиями; producer и consumer читают события прежних версий при replay, в том числе после обновления.
     source: [NFR-COMP-002, NFR-COMP-003]
 
   - id: EVQ-006
-    decision: Утвердить Kafka-топологию, ключи партиционирования, подтверждения, границы повтора и политику изоляции ошибок; проверить достаточность 7-дневного retention из ADR-0002 для каждого потока.
-    impact: stream_candidate — рабочие имена, транзакция Kafka не делает записи Redis/ClickHouse/PostgreSQL атомарными; задержка downstream ограничена retention.
+    decision: При принятых логических ключах ADR-0005 утвердить число партиций и топологию потоков, бинарное кодирование составных ключей, подтверждения, границы повтора и политику изоляции ошибок; проверить достаточность 7-дневного retention из ADR-0002 для каждого потока.
+    impact: stream_candidate — рабочие имена, направление по ключу не является дедупликацией; транзакция Kafka не делает записи Redis/ClickHouse/PostgreSQL атомарными; задержка downstream ограничена retention.
     verification: При отказе узла после подтверждения и при повторной доставке данные доступны, а доменный результат не дублируется.
     source: [FR-004, FR-005, FR-017, FR-018, NFR-REL-001, NFR-REL-004]
-
-  - id: EVQ-007
-    decision: Определить идентичность перехода алерта при гонке ручного сброса и автоматической оценки, политику отсутствия данных и повторного срабатывания.
-    impact: Уникальность AlertStateChanged, допустимые переходы и дедупликация при replay.
-    verification: Одновременные сброс и автоматическая оценка не сохраняют два противоречащих события; отсутствие изменения состояния не создаёт событие.
-    source: [BR-016, BR-017, BR-018, FR-023]
-
-  - id: EVQ-008
-    decision: Определить реакцию на повтор одного measurementId с изменённым содержимым и способ проверки конфликтов на входе и при replay.
-    impact: Без этого нельзя утвердить ответ агента о конфликте; молчаливая замена исходного измерения запрещена BR-005. Дедупликация ClickHouse требует отдельного механизма.
-    verification: Повтор с тем же ID и прежним содержимым не создаёт вторую доменную точку; изменение содержимого не перезаписывает первую.
-    source: [BR-005, BR-011, FR-012, FR-017]
 
   - id: EVQ-009
     decision: Определить срок хранения полного raw-архива в MinIO и формат точного представления исходного значения и меток (если нужен побайтовый оригинал), разбиение и процедуру чтения файлов.
     impact: Стоимость долгого хранения, точность восстановления исходной точки и доступность replay после истечения Kafka retention.
     verification: По measurementId точка читается из архива после удаления из ClickHouse; срок и точность восстановления соответствуют согласованной политике.
     source: [FR-004, FR-012, FR-013, FR-017]
+
+  - id: EVQ-010
+    decision: Выбрать масштабируемый и устойчивый механизм проверки measurementId и исходного содержимого до любых доменных эффектов в Processing и Storage Writer, включая гонки, replay из MinIO и срок хранения сведений об ID.
+    impact: При 200 000 точек/с синхронный реестр всех ID в Ingestion не требуется, но независимая запись metrics.raw в ClickHouse не должна обходить проверку; одного PK в ClickHouse недостаточно.
+    verification: Конкурирующие повторы одного ID с разным содержимым, потерянный ответ и replay после суток в ClickHouse дают не более одной доменной точки и один согласованный набор производных результатов; конфликт доступен в диагностике.
+    source: [FR-004, FR-012, FR-017, FR-018, BR-011, BR-033]
+
+  - id: EVQ-011
+    decision: Определить техническую изоляцию replay от live-потока алертинга (отдельный маршрут или надёжный признак режима обработки), не меняя идентичность исходной точки.
+    impact: При общей топологии Kafka Alerting не должен принять восстановленный агрегат или нормализованную точку за новую live-оценку; replay не создаёт и не исправляет AlertEvent (BR-036).
+    verification: Replay временного интервала с прежним FIRING пересчитывает историю/агрегаты, но не меняет Alert, AlertEvent, outbox и не отправляет новое уведомление.
+    source: [FR-010, FR-017, BR-036, UC-008]

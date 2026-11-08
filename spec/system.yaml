@@ -336,6 +336,7 @@ system:
     glossary: docs/11-glossary.md
 
   specifications:
+    architecture: spec/architecture.yaml
     domain: spec/domain.yaml
     requirements: spec/requirements.yaml
     non_functional_requirements: spec/non-functional-requirements.yaml
@@ -350,6 +351,8 @@ system:
       - adr/0001-architecture-style.md
       - adr/0002-database-choice.md
       - adr/0003-authentication.md
+      - adr/0004-event-serialization.md
+      - adr/0005-kafka-partition-keys.md
 
   traceability:
     requirements_to_use_cases:

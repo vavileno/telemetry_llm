@@ -133,6 +133,8 @@ entities:
       window:
         type: duration
         required: true
+        allowedSeconds: [60, 300, 3600]
+        description: Поддерживаемые длительности окон агрегации — 1 минута, 5 минут и 1 час; не задают сроки хранения.
       groupByLabels:
         type: list<string>
       status:
@@ -169,6 +171,10 @@ entities:
       value:
         type: decimal
         required: true
+      sum:
+        type: decimal
+        nullable: true
+        description: Обязательная сумма исходных значений только для AVG; для остальных функций отсутствует. AVG.value вычисляется из sum и sampleCount.
       sampleCount:
         type: integer
         required: true
@@ -214,6 +220,10 @@ entities:
       pendingPeriod:
         type: duration
         required: true
+      manualResetSuppressionPeriod:
+        type: duration
+        required: true
+        description: Настраиваемый положительный период подавления повторного срабатывания после ручного сброса.
       severity:
         type: AlertSeverity
         required: true
@@ -259,6 +269,10 @@ entities:
       resolvedAt:
         type: datetime
         nullable: true
+      suppressedUntil:
+        type: datetime
+        nullable: true
+        description: Окончание подавления после ручного сброса, фиксируется в той же транзакции; отсутствие значения означает отсутствие подавления.
 
   AlertEvent:
     description: Зафиксированный факт изменения состояния алерта.
