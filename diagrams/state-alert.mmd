@@ -8,11 +8,14 @@ stateDiagram-v2
     FIRING --> RESOLVED: condition_cleared
     RESOLVED --> NORMAL: recovery_confirmed
 
-    FIRING --> RESOLVED: manual_resolve
+    FIRING --> RESOLVED: manual_resolve / suppressedUntil set
     PENDING --> RESOLVED: rule_disabled
     FIRING --> RESOLVED: rule_disabled
 
-    RESOLVED --> PENDING: condition_detected_again
+    RESOLVED --> PENDING: new_live_evaluation_after_suppression
+
+    %% No data by itself does not resolve an alert (BR-034).
+    %% Suppression expiry and historical replay do not cause transitions (BR-035/036).
 
     NORMAL: Метрика в допустимых пределах
     PENDING: Условие алерта выполняется, но период ожидания ещё не истёк

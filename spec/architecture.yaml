@@ -24,8 +24,27 @@ architecture:
   adopted_decisions:
     - adr/0001-architecture-style.md
     - adr/0002-database-choice.md
+    - adr/0003-authentication.md
     - adr/0004-event-serialization.md
     - adr/0005-kafka-partition-keys.md
+
+  access_control:
+    decision: adr/0003-authentication.md
+    identity_provider: Keycloak
+    human_authentication: OIDC Authorization Code with PKCE
+    external_agent_authentication: OAuth 2.0 Client Credentials, отдельный короткоживущий токен на агента
+    external_transport: TLS
+    internal_service_transport: mTLS
+    source_permissions: [READ, WRITE]
+    grants_system_of_record: postgres
+    grant_key: [principalIssuer, principalId, sourceId, permission]
+    administration: Административная роль; не предоставляет неявный READ или WRITE на все источники.
+    ingest_check: WRITE и допустимый статус для каждого sourceId; устаревший снимок не разрешает приём.
+    query_check: READ до чтения любого слоя и кеша; межисточниковый агрегат требует прав на все вошедшие источники.
+    targets_pending_verification:
+      agent_access_token_lifetime_seconds: 300
+      max_snapshot_age_without_confirmation_seconds: 30
+      normal_revocation_delay_seconds: 30
 
   external_participants:
     - id: telemetry-source
@@ -164,6 +183,7 @@ architecture:
 
   data_ownership:
     - {dataset: source_and_metric_configuration, system_of_record: postgres, writer: control, readers: [ingestion, processing, alerting]}
+    - {dataset: source_access_grants, system_of_record: postgres, writer: control, readers: [ingestion, query], constraint: Версионированные снимки ограниченной свежести; Keycloak хранит идентичности, не авторитетную привязку к источникам.}
     - {dataset: raw_history, system_of_record: clickhouse, writer: storage_writer, readers: [query, archive, replay], constraint: Только после проверки measurementId и содержимого по BR-033.}
     - {dataset: aggregate_history, system_of_record: clickhouse, writer: storage_writer, readers: [query, archive, replay]}
     - {dataset: latest, system_of_record: redis_latest, writer: storage_writer, readers: [query]}
@@ -184,11 +204,12 @@ architecture:
     - {id: publish_aggregates_for_alerting, from: processing, to: alerting, via: kafka, stream: metrics.1m, event: MetricAggregateCalculated, partition_key: Политика и группа агрегации, status: proposed, constraint: Имя потока проектное; окна 1m/5m/1h; replay исключён по BR-036; маршрутизация и изоляция открыты (EVQ-006, EVQ-011).}
     - {id: persist_history, from: storage_writer, to: clickhouse, mode: batch_write, data: Проверенный raw и агрегаты, status: proposed}
     - {id: persist_latest, from: storage_writer, to: redis_latest, mode: conditional_write, data: Последнее валидное значение ряда, status: proposed}
-    - {id: read_configuration_ingestion, from: ingestion, to: postgres, mode: read, data: Источники и определения метрик, status: proposed, constraint: Через разрешённый интерфейс или согласованный снимок.}
+    - {id: read_configuration_ingestion, from: ingestion, to: postgres, mode: read, data: Источники, статусы, привязки прав и определения метрик, status: proposed, constraint: Через разрешённый интерфейс или версионированный снимок с ограничением свежести (ADR-0003).}
+    - {id: read_grants_query, from: query, to: postgres, mode: read, data: Привязки READ к источникам, status: proposed, constraint: Через разрешённый интерфейс или снимок; без актуальных прав доступ не предоставляется (ADR-0003).}
     - {id: read_configuration_processing, from: processing, to: postgres, mode: read, data: Политики и определения, status: proposed, constraint: Через разрешённый интерфейс или согласованный снимок.}
     - {id: read_configuration_alerting, from: alerting, to: postgres, mode: read, data: Правила алертинга, status: proposed, constraint: Через разрешённый интерфейс или согласованный снимок.}
     - {id: record_failure, from: processing, to: postgres, mode: write, data: ProcessingFailure для диагностики, status: proposed}
-    - {id: manage_configuration, from: control, to: postgres, mode: write, data: Источники и правила, status: proposed}
+    - {id: manage_configuration, from: control, to: postgres, mode: write, data: Источники, привязки READ/WRITE и правила, status: proposed}
     - {id: reset_alert, from: control, to: alerting, mode: command, data: Авторизованный ручной сброс, status: proposed}
     - {id: persist_alert, from: alerting, to: postgres, mode: transaction, data: Alert + AlertEvent + outbox, status: proposed, invariant: BR-032}
     - {id: read_outbox, from: postgres, to: dispatcher, mode: read, data: AlertEvent и outbox, status: proposed}

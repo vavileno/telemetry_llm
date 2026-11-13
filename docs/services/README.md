@@ -1,6 +1,7 @@
 # Сервисы платформы телеметрии
 
-Статус: **проектные описания**. Общая архитектура и границы контейнеров — в
+Статус: **проектные описания**. Машиночитаемые границы и связи — в
+[`spec/architecture.yaml`](../../spec/architecture.yaml), пояснения — в
 [`docs/05-architecture.md`](../05-architecture.md); диаграммы —
 [`containers.mmd`](../../diagrams/containers.mmd) и
 [`components.mmd`](../../diagrams/components.mmd). Сервис здесь — логическая
@@ -30,6 +31,7 @@
 | Функциональные и нефункциональные требования | [`spec/requirements.yaml`](../../spec/requirements.yaml), [`spec/non-functional-requirements.yaml`](../../spec/non-functional-requirements.yaml) | Ссылки на идентификаторы, не переписывать критерии приёмки |
 | Бизнес-правила, модели состояний, сценарии | [`spec/business-rules.yaml`](../../spec/business-rules.yaml), [`spec/domain.yaml`](../../spec/domain.yaml), [`spec/use-cases.yaml`](../../spec/use-cases.yaml) | Только применение к сервису и ссылки |
 | Выбор технологии и причины выбора | [`adr/`](../../adr/0001-architecture-style.md) | Ссылки на принятые ADR; новое спорное решение требует ADR |
+| Подсистемы, внутренние компоненты и связи | [`spec/architecture.yaml`](../../spec/architecture.yaml) | Реализация своей части проектной модели, не отдельный источник её топологии |
 | API и события | [`spec/api.openapi.yaml`](../../spec/api.openapi.yaml), [`spec/events.yaml`](../../spec/events.yaml) | Предполагаемые входы/выходы, пока контракты не заполнены |
 | Владение данными | [`spec/database.dbml`](../../spec/database.dbml) и [`docs/05-architecture.md`](../05-architecture.md) | Какие данные сервис читает/изменяет и на какой стороне границы |
 

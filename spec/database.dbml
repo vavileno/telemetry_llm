@@ -29,13 +29,14 @@
 //     «правило/политика + набор меток» (BR-009, BR-011);
 //   - archive_object и его статусы — в domain.yaml отсутствуют, нужны для FR-013;
 //   - alert_event_outbox — техническая очередь публикации, не отдельное доменное событие (BR-032);
+//   - source_access_grant — техническая привязка субъекта Keycloak к источнику и праву READ/WRITE (ADR-0003);
 //   - MetricAggregate.function назван aggregation_function: FUNCTION зарезервирован в SQL.
 //
 // Физические параметры ts (движок, партиционирование, порядок сортировки, TTL)
 // зафиксированы в adr/0002-database-choice.md и в note соответствующих таблиц.
 //
 // Открытые вопросы:
-//   - модель аутентификации (FR-020) описана в ADR-0003, который пока не заполнен;
+//   - доставка версий прав и статусов в Ingestion/Query Service требует реализации по ADR-0003;
 //   - политики хранения (NFR, durability) не описаны в domain.yaml — кандидат в отдельные таблицы.
 
 
@@ -54,6 +55,12 @@ enum source_status {
   ACTIVE
   INACTIVE
   DISABLED
+}
+
+// тех. Два права доступа к данным конкретного источника (ADR-0003).
+enum source_access_permission {
+  READ
+  WRITE
 }
 
 enum metric_kind {
@@ -203,6 +210,22 @@ Table meta.source_attribute {
   indexes {
     (telemetry_source_id, attr_key) [pk]
   }
+}
+
+// тех. Control Service управляет разрешениями; учётные данные и токены остаются в Keycloak.
+Table meta.source_access_grant {
+  principal_issuer varchar [not null, note: 'область идентичности Keycloak']
+  principal_id varchar [not null, note: 'стабильный идентификатор субъекта, не отображаемое имя']
+  telemetry_source_id uuid [not null]
+  permission source_access_permission [not null, note: 'WRITE разрешает ingest; READ разрешает чтение данных источника']
+  created_at timestamp [not null]
+  updated_at timestamp [not null]
+
+  indexes {
+    (principal_issuer, principal_id, telemetry_source_id, permission) [pk]
+    (telemetry_source_id, permission) [name: 'ix_source_access_source_permission']
+  }
+  note: 'ADR-0003: источник истины для привязок; локальные снимки Ingestion/Query Service ограничены свежестью. Механизм версии снимка и доставки изменений определяется отдельно.'
 }
 
 // MetricDefinition: определение измеряемого показателя и правил его интерпретации.
@@ -567,6 +590,8 @@ Table archive.archive_object {
 // --- meta ---
 
 Ref: meta.source_attribute.telemetry_source_id > meta.telemetry_source.id [delete: cascade]
+
+Ref: meta.source_access_grant.telemetry_source_id > meta.telemetry_source.id [delete: cascade]
 
 Ref: meta.metric_definition_allowed_label.metric_definition_id > meta.metric_definition.id [delete: cascade]
 
