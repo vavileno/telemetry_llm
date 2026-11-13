@@ -21,12 +21,93 @@ architecture:
     - Внутренние компоненты — модули своего контейнера; их взаимодействие не является межсервисным API.
     - Внутренние связи наследуют статус proposed своего контейнера; отдельное утверждение ADR не выводится из наличия стрелки.
     - Принятые решения и остающиеся проектными детали помечаются отдельно; полнота реализации не подразумевается.
+    - connections — перечень предложенных взаимодействий, не исчерпывающий allowlist; отсутствие стрелки само по себе не является запретом.
+    - Ссылка на принятое ограничение описывает обязательное условие, но не утверждает протокол или маршрут связи со статусом proposed.
   adopted_decisions:
     - adr/0001-architecture-style.md
     - adr/0002-database-choice.md
     - adr/0003-authentication.md
     - adr/0004-event-serialization.md
     - adr/0005-kafka-partition-keys.md
+
+  adopted_constraints:
+    - id: AC-001
+      status: adopted
+      sources: [adr/0003-authentication.md, FR-020, FR-022]
+      rule: Внешний приём требует действительного WRITE и допустимого статуса каждого источника; чтение любого слоя и кеша требует READ, при недостоверных правах доступ не предоставляется.
+    - id: AC-002
+      status: adopted
+      sources: [BR-033, BR-011]
+      rule: Исходная точка не создаёт историю и другие доменные эффекты до проверки measurementId и исходного содержимого; конфликт изолируется.
+    - id: AC-003
+      status: adopted
+      sources: [BR-010, INV-003]
+      rule: Более старое или неподтверждённое SUSPECT-измерение не заменяет latest; повторная запись не должна менять результат.
+    - id: AC-004
+      status: adopted
+      sources: [BR-031, FR-013]
+      rule: Полный raw нельзя удалять из ClickHouse до проверки полноты, checksum и подтверждения каталога RAW_SAMPLES в PostgreSQL.
+    - id: AC-005
+      status: adopted
+      sources: [BR-036, FR-017]
+      rule: Replay пересчитывает историю и агрегаты, но не изменяет Alert, AlertEvent и outbox и не публикует алерты из исторических точек.
+    - id: AC-006
+      status: adopted
+      sources: [BR-032, FR-010]
+      rule: При переходе Alert, AlertEvent и outbox фиксируются одной транзакцией PostgreSQL; повтор публикации сохраняет eventId.
+    - id: AC-007
+      status: adopted
+      sources: [adr/0005-kafka-partition-keys.md]
+      rule: Логические ключи Kafka определены по типам событий; ключ не гарантирует дедупликацию, а число партиций и кодирование остаются открытыми.
+    - id: AC-008
+      status: adopted
+      sources: [adr/0004-event-serialization.md]
+      rule: Внутренние Kafka-события используют Avro и Apicurio Registry с BACKWARD_TRANSITIVE; исполняемые схемы и framing ещё не утверждены.
+    - id: AC-009
+      status: adopted
+      sources: [FR-001, FR-004, BR-030]
+      rule: Каждая точка подтверждается только после надёжной записи в Kafka; успех других точек пакета не откатывается из-за её отказа.
+
+  dependency_policy:
+    scope: proposed_topology_with_adopted_guards
+    write_authority:
+      status: proposed
+      source: architecture.data_ownership
+      rule: Для каждого набора данных предполагаемые писатели указаны в writer и progress_writer; это не утверждает прямой доступ к хранилищу и не заменяет проверку принятых ограничений.
+    prohibited_paths:
+      - id: DP-001
+        status: adopted
+        actor: storage_writer
+        dataset: raw_history
+        operation: write_unchecked_sample
+        constraint_ids: [AC-002]
+      - id: DP-002
+        status: adopted
+        actor: replay
+        dataset: alert_state_events_outbox
+        operation: mutate_or_publish_from_replay
+        constraint_ids: [AC-005]
+      - id: DP-003
+        status: adopted
+        actor: query
+        datasets: [raw_history, aggregate_history, latest, query_cache, archive_catalog, raw_and_aggregate_archive]
+        operation: disclose_without_verified_read
+        constraint_ids: [AC-001]
+      - id: DP-004
+        status: adopted
+        actor: archive
+        dataset: raw_history
+        operation: delete_before_verified_archive
+        constraint_ids: [AC-004]
+    pending_paths:
+      - {connection: consume_raw_history, questions: [EVQ-010], issue: Согласовать доставку проверенного raw в Storage Writer без обхода проверки ID.}
+      - {connection: replay_to_processing, questions: [EVQ-011], issue: Выбрать техническую изоляцию replay от live-алертинга.}
+      - {connection: publish_normalized_for_alerting, questions: [EVQ-011], issue: Исключить результаты replay из live-оценки.}
+      - {connection: publish_aggregates_for_alerting, questions: [EVQ-006, EVQ-011], issue: Утвердить маршрутизацию окон и изоляцию replay.}
+    transaction_boundaries:
+      - {connection: persist_alert, constraint_ids: [AC-006], scope: PostgreSQL Alert + AlertEvent + outbox}
+      - {connection: publish_raw, constraint_ids: [AC-009], scope: Поэлементное подтверждение Kafka; downstream-хранилища не включены в одну транзакцию, source: spec/events.yaml}
+    delivery_details: spec/events.yaml
 
   access_control:
     decision: adr/0003-authentication.md
@@ -75,7 +156,7 @@ architecture:
       kind: service
       status: proposed
       responsibility: Авторизованный приём и валидация точек, подтверждение каждой точки после записи в Kafka.
-      requirements: [FR-001, FR-002, FR-003, FR-004, FR-005, FR-022]
+      requirements: [FR-001, FR-002, FR-003, FR-004, FR-005, FR-019, FR-022]
       documentation: docs/services/ingestion.md
       components:
         - {id: receive, responsibility: Разбор пакета и контроль ограничений.}
@@ -87,7 +168,7 @@ architecture:
       kind: service
       status: proposed
       responsibility: Проверка ID и исходного содержимого до доменных эффектов, нормализация, event time и агрегация.
-      requirements: [FR-006, FR-007, FR-008, FR-018]
+      requirements: [FR-006, FR-007, FR-008, FR-018, FR-019]
       components:
         - {id: identity_check, responsibility: Проверка measurementId и конфликта; устойчивый механизм открыт (EVQ-010).}
         - {id: normalize, responsibility: Нормализация и определение fingerprint временного ряда.}
@@ -99,7 +180,7 @@ architecture:
       kind: service
       status: proposed
       responsibility: Оценка правил на live-данных и сериализованные переходы состояний Alert.
-      requirements: [FR-009, FR-010, FR-023]
+      requirements: [FR-009, FR-010, FR-019, FR-023]
       documentation: docs/services/alerting.md
       components:
         - {id: load_rules, responsibility: Согласованный снимок активных правил.}
@@ -111,7 +192,7 @@ architecture:
       kind: service
       status: proposed
       responsibility: История проверенных raw-точек и агрегатов, условное обновление latest.
-      requirements: [FR-011, FR-012]
+      requirements: [FR-011, FR-012, FR-019]
       components:
         - {id: consume_checked, responsibility: Чтение только прошедших проверку ID данных; нельзя обойти BR-033 прямой записью raw.}
         - {id: write_history, responsibility: Пакетная запись истории и агрегатов в ClickHouse.}
@@ -121,7 +202,7 @@ architecture:
       kind: service
       status: proposed
       responsibility: Авторизованный доступ к latest, истории и архиву с указанием неполных результатов.
-      requirements: [FR-014, FR-015, FR-016, FR-020]
+      requirements: [FR-014, FR-015, FR-016, FR-019, FR-020]
       components:
         - {id: validate_query, responsibility: "Проверка прав, диапазона и лимитов результата."}
         - {id: plan, responsibility: Выбор уровня хранения по диапазону и типу данных.}
@@ -131,7 +212,7 @@ architecture:
       kind: service
       status: proposed
       responsibility: Управление источниками, определениями, политиками, правилами и заданиями; административный аудит.
-      requirements: [FR-009, FR-017, FR-018, FR-020, FR-021, FR-023]
+      requirements: [FR-009, FR-017, FR-018, FR-019, FR-020, FR-021, FR-023]
       components:
         - {id: authorize_admin, responsibility: Права и аудит административных действий.}
         - {id: manage_config, responsibility: "Управление источниками, метриками, политиками и правилами."}
@@ -142,7 +223,7 @@ architecture:
       kind: worker
       status: proposed
       responsibility: Повторная обработка доступных точек для истории и агрегатов без изменения Alert и AlertEvent.
-      requirements: [FR-017, FR-018]
+      requirements: [FR-017, FR-018, FR-019]
       components:
         - {id: select_range, responsibility: Проверка доступности диапазона Kafka или MinIO и прогресс задания.}
         - {id: reprocess, responsibility: Передача исходных точек на повторную обработку с сохранением measurementId.}
@@ -151,7 +232,7 @@ architecture:
       kind: worker
       status: proposed
       responsibility: Проверенный архив полного raw и агрегатов; удаление raw из ClickHouse только после подтверждения архива.
-      requirements: [FR-013]
+      requirements: [FR-013, FR-019]
       components:
         - {id: export, responsibility: Выгрузка исходных точек и агрегатов отдельно.}
         - {id: verify, responsibility: Проверка полноты и checksum.}
@@ -161,7 +242,7 @@ architecture:
       kind: worker
       status: proposed
       responsibility: Асинхронная публикация AlertEvent из outbox с неизменным eventId.
-      requirements: [FR-010, FR-023]
+      requirements: [FR-010, FR-019, FR-023]
       components:
         - {id: publish_outbox, responsibility: Публикация и повтор после сбоя с тем же AlertEvent.id.}
     - id: external_event_adapter
@@ -169,7 +250,7 @@ architecture:
       kind: adapter
       status: proposed
       responsibility: Передача событий алертинга внешним получателям; каналы и обработка инцидентов остаются вне платформы.
-      requirements: [FR-010]
+      requirements: [FR-010, FR-019]
       components:
         - {id: deliver, responsibility: Интеграция с внешними системами и контроль повторной доставки.}
 
@@ -181,57 +262,66 @@ architecture:
     - {id: clickhouse, kind: database, technology: ClickHouse, responsibility: История raw на сутки и агрегаты по политике.}
     - {id: minio, kind: archive, technology: MinIO, responsibility: Архив полного raw и агрегатов в Parquet.}
 
+  observability:
+    requirements: [FR-019, NFR-OBS-001, NFR-OBS-002, NFR-OBS-003, NFR-OBS-004]
+    applies_to: all_subsystems
+    responsibility: Каждый существующий контейнер публикует показатели и состояние своей части конвейера; отсутствие свежих данных показывается как неизвестное, а не как нулевое значение.
+    signals: [readiness, liveness, ingest_rate, error_rate, consumer_lag, freshness, outbox_depth, write_failures, unarchived_data_age]
+    signal_scope: Каждый контейнер публикует применимые к его ответственности сигналы; consumer_lag и outbox_depth не требуются от контейнера без соответствующего потребителя или outbox.
+    pipeline_view: {status: proposed, use_case: UC-007, description: Контроль конвейера использует сигналы существующих контейнеров; отдельный сервис наблюдаемости этой моделью не вводится.}
+    source: docs/05-architecture.md
+
   data_ownership:
     - {dataset: source_and_metric_configuration, system_of_record: postgres, writer: control, readers: [ingestion, processing, alerting]}
-    - {dataset: source_access_grants, system_of_record: postgres, writer: control, readers: [ingestion, query], constraint: Версионированные снимки ограниченной свежести; Keycloak хранит идентичности, не авторитетную привязку к источникам.}
-    - {dataset: raw_history, system_of_record: clickhouse, writer: storage_writer, readers: [query, archive, replay], constraint: Только после проверки measurementId и содержимого по BR-033.}
+    - {dataset: source_access_grants, system_of_record: postgres, writer: control, readers: [ingestion, query], constraint_ids: [AC-001], constraint: Версионированные снимки ограниченной свежести; Keycloak хранит идентичности, не авторитетную привязку к источникам.}
+    - {dataset: raw_history, system_of_record: clickhouse, writer: storage_writer, readers: [query, archive, replay], constraint_ids: [AC-002, AC-004], constraint: Только после проверки measurementId и содержимого по BR-033.}
     - {dataset: aggregate_history, system_of_record: clickhouse, writer: storage_writer, readers: [query, archive, replay]}
-    - {dataset: latest, system_of_record: redis_latest, writer: storage_writer, readers: [query]}
+    - {dataset: latest, system_of_record: redis_latest, writer: storage_writer, readers: [query], constraint_ids: [AC-003]}
     - {dataset: query_cache, system_of_record: redis_cache, writer: query, readers: [query]}
-    - {dataset: alert_state_events_outbox, system_of_record: postgres, writer: alerting, readers: [query, dispatcher]}
+    - {dataset: alert_state_events_outbox, system_of_record: postgres, writer: alerting, readers: [query, dispatcher], constraint_ids: [AC-005, AC-006]}
     - {dataset: processing_failures, system_of_record: postgres, writer: processing, readers: [control]}
-    - {dataset: replay_jobs, system_of_record: postgres, writer: control, progress_writer: replay, readers: [replay]}
+    - {dataset: replay_jobs, system_of_record: postgres, writer: control, progress_writer: replay, progress_writer_scope: Прогресс и результат задания; не создание и не административное изменение задания., readers: [replay]}
     - {dataset: archive_catalog, system_of_record: postgres, writer: archive, readers: [query, replay]}
     - {dataset: raw_and_aggregate_archive, system_of_record: minio, writer: archive, readers: [query, replay]}
 
   connections:
-    - {id: send_metrics, from: telemetry-source, to: ingestion, mode: request, data: Пакет точек с measurementId и ответ по каждой точке, status: proposed}
-    - {id: publish_raw, from: ingestion, to: processing, via: kafka, stream: metrics.raw, event: MetricAccepted, partition_key: measurementId, status: proposed}
-    - {id: consume_raw_history, from: ingestion, to: storage_writer, via: kafka, stream: metrics.raw, event: MetricAccepted, status: proposed, constraint: Запись только после проверки BR-033; согласование с Processing открыто (EVQ-010).}
-    - {id: publish_normalized_for_storage, from: processing, to: storage_writer, via: kafka, stream: metrics.normalized, event: MetricNormalized, partition_key: timeSeriesFingerprint, status: proposed}
-    - {id: publish_normalized_for_alerting, from: processing, to: alerting, via: kafka, stream: metrics.normalized, event: MetricNormalized, partition_key: timeSeriesFingerprint, status: proposed, constraint: Только live-оценка; изоляция replay открыта (EVQ-011).}
-    - {id: publish_aggregates_for_storage, from: processing, to: storage_writer, via: kafka, stream: metrics.1m, event: MetricAggregateCalculated, partition_key: Политика и группа агрегации, status: proposed, constraint: Имя потока проектное; политики допускают окна 1m/5m/1h; маршрутизация открыта (EVQ-006).}
-    - {id: publish_aggregates_for_alerting, from: processing, to: alerting, via: kafka, stream: metrics.1m, event: MetricAggregateCalculated, partition_key: Политика и группа агрегации, status: proposed, constraint: Имя потока проектное; окна 1m/5m/1h; replay исключён по BR-036; маршрутизация и изоляция открыты (EVQ-006, EVQ-011).}
-    - {id: persist_history, from: storage_writer, to: clickhouse, mode: batch_write, data: Проверенный raw и агрегаты, status: proposed}
-    - {id: persist_latest, from: storage_writer, to: redis_latest, mode: conditional_write, data: Последнее валидное значение ряда, status: proposed}
-    - {id: read_configuration_ingestion, from: ingestion, to: postgres, mode: read, data: Источники, статусы, привязки прав и определения метрик, status: proposed, constraint: Через разрешённый интерфейс или версионированный снимок с ограничением свежести (ADR-0003).}
-    - {id: read_grants_query, from: query, to: postgres, mode: read, data: Привязки READ к источникам, status: proposed, constraint: Через разрешённый интерфейс или снимок; без актуальных прав доступ не предоставляется (ADR-0003).}
+    - {id: send_metrics, from: telemetry-source, to: ingestion, mode: request, data: Пакет точек с measurementId и ответ по каждой точке, status: proposed, constraint_ids: [AC-001, AC-009]}
+    - {id: publish_raw, from: ingestion, to: processing, via: kafka, stream: metrics.raw, event: MetricAccepted, partition_key: measurementId, status: proposed, constraint_ids: [AC-007, AC-008, AC-009]}
+    - {id: consume_raw_history, from: ingestion, to: storage_writer, via: kafka, stream: metrics.raw, event: MetricAccepted, status: proposed, constraint_ids: [AC-002, AC-007, AC-008], unresolved: [EVQ-010], constraint: Запись только после проверки BR-033; согласование с Processing открыто (EVQ-010).}
+    - {id: publish_normalized_for_storage, from: processing, to: storage_writer, via: kafka, stream: metrics.normalized, event: MetricNormalized, partition_key: timeSeriesFingerprint, status: proposed, constraint_ids: [AC-002, AC-007, AC-008]}
+    - {id: publish_normalized_for_alerting, from: processing, to: alerting, via: kafka, stream: metrics.normalized, event: MetricNormalized, partition_key: timeSeriesFingerprint, status: proposed, constraint_ids: [AC-005, AC-007, AC-008], unresolved: [EVQ-011], constraint: Только live-оценка; изоляция replay открыта (EVQ-011).}
+    - {id: publish_aggregates_for_storage, from: processing, to: storage_writer, via: kafka, stream: metrics.1m, event: MetricAggregateCalculated, partition_key: Политика и группа агрегации, status: proposed, constraint_ids: [AC-007, AC-008], unresolved: [EVQ-006], constraint: Имя потока проектное; политики допускают окна 1m/5m/1h; маршрутизация открыта (EVQ-006).}
+    - {id: publish_aggregates_for_alerting, from: processing, to: alerting, via: kafka, stream: metrics.1m, event: MetricAggregateCalculated, partition_key: Политика и группа агрегации, status: proposed, constraint_ids: [AC-005, AC-007, AC-008], unresolved: [EVQ-006, EVQ-011], constraint: Имя потока проектное; окна 1m/5m/1h; replay исключён по BR-036; маршрутизация и изоляция открыты (EVQ-006, EVQ-011).}
+    - {id: persist_history, from: storage_writer, to: clickhouse, mode: batch_write, data: Проверенный raw и агрегаты, status: proposed, constraint_ids: [AC-002]}
+    - {id: persist_latest, from: storage_writer, to: redis_latest, mode: conditional_write, data: Последнее валидное значение ряда, status: proposed, constraint_ids: [AC-002, AC-003]}
+    - {id: read_configuration_ingestion, from: ingestion, to: postgres, mode: read, data: Источники, статусы, привязки прав и определения метрик, status: proposed, constraint_ids: [AC-001], constraint: Через разрешённый интерфейс или версионированный снимок с ограничением свежести (ADR-0003).}
+    - {id: read_grants_query, from: query, to: postgres, mode: read, data: Привязки READ к источникам, status: proposed, constraint_ids: [AC-001], constraint: Через разрешённый интерфейс или снимок; без актуальных прав доступ не предоставляется (ADR-0003).}
     - {id: read_configuration_processing, from: processing, to: postgres, mode: read, data: Политики и определения, status: proposed, constraint: Через разрешённый интерфейс или согласованный снимок.}
     - {id: read_configuration_alerting, from: alerting, to: postgres, mode: read, data: Правила алертинга, status: proposed, constraint: Через разрешённый интерфейс или согласованный снимок.}
     - {id: record_failure, from: processing, to: postgres, mode: write, data: ProcessingFailure для диагностики, status: proposed}
     - {id: manage_configuration, from: control, to: postgres, mode: write, data: Источники, привязки READ/WRITE и правила, status: proposed}
-    - {id: reset_alert, from: control, to: alerting, mode: command, data: Авторизованный ручной сброс, status: proposed}
-    - {id: persist_alert, from: alerting, to: postgres, mode: transaction, data: Alert + AlertEvent + outbox, status: proposed, invariant: BR-032}
+    - {id: reset_alert, from: control, to: alerting, mode: command, data: Авторизованный ручной сброс, status: proposed, constraint_ids: [AC-006]}
+    - {id: persist_alert, from: alerting, to: postgres, mode: transaction, data: Alert + AlertEvent + outbox, status: proposed, constraint_ids: [AC-006], invariant: BR-032}
     - {id: read_outbox, from: postgres, to: dispatcher, mode: read, data: AlertEvent и outbox, status: proposed}
-    - {id: publish_alert, from: dispatcher, to: external_event_adapter, via: kafka, stream: alerts, event: AlertStateChanged, partition_key: alertId, status: proposed}
+    - {id: publish_alert, from: dispatcher, to: external_event_adapter, via: kafka, stream: alerts, event: AlertStateChanged, partition_key: alertId, status: proposed, constraint_ids: [AC-006, AC-007, AC-008]}
     - {id: deliver_notification, from: external_event_adapter, to: notification-system, mode: integration, data: События алертинга, status: proposed}
     - {id: deliver_incident, from: external_event_adapter, to: incident-management, mode: integration, data: События алертинга, status: proposed}
-    - {id: query_operator, from: operator, to: query, mode: request, data: Последние и исторические данные, status: proposed}
-    - {id: query_visualization, from: visualization-system, to: query, mode: request, data: Метрики и агрегаты, status: proposed}
-    - {id: query_analytics, from: external-analytics, to: query, mode: request, data: Метрики и агрегаты, status: proposed}
-    - {id: query_latest, from: query, to: redis_latest, mode: read, data: Последнее значение, status: proposed}
-    - {id: query_cache, from: query, to: redis_cache, mode: read_write, data: Кеш результатов, status: proposed}
-    - {id: query_history, from: query, to: clickhouse, mode: read, data: История и агрегаты, status: proposed}
-    - {id: query_archive, from: query, to: minio, mode: read, data: Архивный диапазон, status: proposed}
+    - {id: query_operator, from: operator, to: query, mode: request, data: Последние и исторические данные, status: proposed, constraint_ids: [AC-001]}
+    - {id: query_visualization, from: visualization-system, to: query, mode: request, data: Метрики и агрегаты, status: proposed, constraint_ids: [AC-001]}
+    - {id: query_analytics, from: external-analytics, to: query, mode: request, data: Метрики и агрегаты, status: proposed, constraint_ids: [AC-001]}
+    - {id: query_latest, from: query, to: redis_latest, mode: read, data: Последнее значение, status: proposed, constraint_ids: [AC-001]}
+    - {id: query_cache, from: query, to: redis_cache, mode: read_write, data: Кеш результатов, status: proposed, constraint_ids: [AC-001]}
+    - {id: query_history, from: query, to: clickhouse, mode: read, data: История и агрегаты, status: proposed, constraint_ids: [AC-001]}
+    - {id: query_archive, from: query, to: minio, mode: read, data: Архивный диапазон, status: proposed, constraint_ids: [AC-001]}
     - {id: administer, from: system-admin, to: control, mode: request, data: Управление и аудит, status: proposed}
     - {id: start_replay, from: control, to: replay, mode: command, data: Задание повторной обработки, status: proposed}
     - {id: replay_from_kafka, from: kafka, to: replay, mode: read, data: Доступный диапазон raw, status: proposed}
     - {id: replay_from_archive, from: minio, to: replay, mode: read, data: Архив полного raw, status: proposed}
-    - {id: replay_to_processing, from: replay, to: processing, mode: replay, data: Исходные точки с прежним measurementId, status: proposed, constraint: Не доставлять результаты в live-алертинг (BR-036); маршрут открыт (EVQ-011).}
+    - {id: replay_to_processing, from: replay, to: processing, mode: replay, data: Исходные точки с прежним measurementId, status: proposed, constraint_ids: [AC-002, AC-005], unresolved: [EVQ-011], constraint: Не доставлять результаты в live-алертинг (BR-036); маршрут открыт (EVQ-011).}
     - {id: replay_progress, from: replay, to: postgres, mode: write, data: Прогресс ReplayJob, status: proposed}
-    - {id: archive_from_history, from: clickhouse, to: archive, mode: read, data: Полный raw и агрегаты, status: proposed}
-    - {id: archive_objects, from: archive, to: minio, mode: write, data: Проверенные Parquet-объекты, status: proposed}
-    - {id: archive_catalog, from: archive, to: postgres, mode: write, data: Каталог и подтверждение архива, status: proposed}
+    - {id: archive_from_history, from: clickhouse, to: archive, mode: read, data: Полный raw и агрегаты, status: proposed, constraint_ids: [AC-004]}
+    - {id: archive_objects, from: archive, to: minio, mode: write, data: Проверенные Parquet-объекты, status: proposed, constraint_ids: [AC-004]}
+    - {id: archive_catalog, from: archive, to: postgres, mode: write, data: Каталог и подтверждение архива, status: proposed, constraint_ids: [AC-004]}
 
   component_connections:
     - {from: ingestion.receive, to: ingestion.authenticate_source}
