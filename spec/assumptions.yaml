@@ -1,0 +1,270 @@
+# Реестр и указатель на первичные источники. Не заменяет ADR, требования или EVQ в events.yaml.
+assumptions_registry:
+  id: telemetry-platform-assumptions
+  status: draft
+  purpose: Допущения для оценки, принятые ограничения и вопросы, требующие решения или проверки.
+  conventions:
+    - Запись пересказывает исходный материал; при расхождении принятое решение определяется ADR и требованиями, а не этим реестром.
+    - planning_unverified означает расчётную гипотезу, adopted — уже принятое ограничение, open — нерешённый вопрос.
+    - Целевые 5 минут и 30 секунд ADR-0003 приняты как цели проверки, но не как доказанные характеристики.
+    - Вопросы EVQ-* сохраняют идентификаторы и подробности в spec/events.yaml; AQ-* обозначают остальные вопросы.
+    - Указание устаревшей проектной оценки не возвращает в требования прежнее окно 1s или его TTL.
+
+  assumptions:
+    - id: ASM-001
+      type: planning_assumption
+      status: planning_unverified
+      statement: Профиль для оценки ёмкости — 100 000–200 000 измерений/с в штатном режиме и кратковременный всплеск до 400 000/с на 5 минут; обязательная пропускная способность отдельно задана NFR-PERF-001.
+      sources: [{path: adr/0002-database-choice.md, section: Контекст}, {path: spec/non-functional-requirements.yaml, ids: [NFR-PERF-001, NFR-PERF-002]}]
+      related_requirements: [NFR-PERF-001, NFR-PERF-002]
+    - id: ASM-002
+      type: planning_assumption
+      status: planning_unverified
+      statement: Для ёмкостного расчёта ADR-0002 использует 1–2 млн активных временных рядов; это не измеренная кардинальность и не требование.
+      sources: [{path: adr/0002-database-choice.md, section: Ёмкость (оценка порядка величины)}]
+      related_requirements: [NFR-SCALE-004]
+    - id: ASM-003
+      type: planning_assumption
+      status: planning_unverified
+      statement: Оценка Redis hot в ADR-0002 предполагает 100 000 приоритетных рядов по одной точке в секунду и окно 15 минут; фактические число рядов и частота не измерены.
+      sources: [{path: adr/0002-database-choice.md, section: Ёмкость (оценка порядка величины)}]
+      related_requirements: [FR-011, NFR-SCALE-004]
+    - id: ASM-004
+      type: planning_assumption
+      status: planning_unverified
+      statement: Пример 50–100 байт на полную raw-точку и оценки сжатия из ADR-0002 не являются результатами замера или утверждёнными требованиями к ёмкости.
+      sources: [{path: adr/0002-database-choice.md, section: Ёмкость (оценка порядка величины)}]
+      related_requirements: [FR-012, FR-013]
+    - id: ASM-005
+      type: planning_assumption
+      status: planning_unverified
+      statement: Ориентир «1 год и более» и оценка размера архива агрегатов 1m/1h в ADR-0002 предварительны; для принятых окон 1m/5m/1h сроки хранения не заданы.
+      sources: [{path: adr/0002-database-choice.md, section: Решение}, {path: adr/0002-database-choice.md, section: Ёмкость (оценка порядка величины)}, {path: spec/database.dbml, table: ts.metric_aggregate}]
+      related_requirements: [FR-007, FR-013, NFR-DUR-002]
+    - id: ASM-006
+      type: planning_assumption
+      status: planning_unverified
+      statement: Для демонстрационного стенда ADR-0002 предполагает масштабирование нагрузки примерно в 1/100; это не производственная гарантия.
+      sources: [{path: adr/0002-database-choice.md, section: Ёмкость (оценка порядка величины)}]
+      related_requirements: [NFR-PERF-001]
+
+  constraints:
+    - id: CON-001
+      type: architectural_constraint
+      status: adopted
+      statement: Основной стиль — потоковая распределённая архитектура с независимым масштабированием приёма, обработки, хранения и запросов; детали контейнеров остаются проектными.
+      sources: [{path: adr/0001-architecture-style.md, section: Решение}, {path: spec/architecture.yaml, section: subsystems}]
+      related_requirements: [NFR-SCALE-002, NFR-REL-001]
+    - id: CON-002
+      type: deployment_constraint
+      status: adopted
+      statement: Самостоятельное развёртывание без привязки к облачному вендору и приоритет зрелых open-source решений.
+      sources: [{path: adr/0002-database-choice.md, section: Контекст}]
+    - id: CON-003
+      type: storage_constraint
+      status: adopted
+      statement: PostgreSQL хранит конфигурацию и алерты, Redis — latest и кеш, ClickHouse — историю и агрегаты, MinIO — архив; Kafka является транспортом с ограниченным replay, не постоянной базой raw.
+      sources: [{path: adr/0002-database-choice.md, section: Решение}, {path: spec/architecture.yaml, section: infrastructure}]
+      related_requirements: [FR-011, FR-012, FR-013, FR-017]
+    - id: CON-004
+      type: data_retention_constraint
+      status: adopted
+      statement: Полный raw хранится в ClickHouse сутки от receivedAt; удаление разрешено только после проверки полного RAW_SAMPLES-архива и каталога, при сбое архивирования — позднее суток. Агрегаты не заменяют raw.
+      sources: [{path: adr/0002-database-choice.md, section: "ClickHouse: исторические данные"}, {path: adr/0002-database-choice.md, section: "MinIO: архив"}, {path: spec/requirements.yaml, ids: [FR-012, FR-013]}]
+      related_requirements: [FR-012, FR-013, NFR-DUR-002]
+    - id: CON-005
+      type: data_identity_constraint
+      status: adopted
+      statement: Агент сохраняет measurementId точки при повторе и replay; конфликт содержимого проверяется до записи нового доменного результата, а Kafka и PK ClickHouse не выполняют дедупликацию вместо платформы.
+      sources: [{path: adr/0002-database-choice.md, section: "ClickHouse: исторические данные"}, {path: adr/0005-kafka-partition-keys.md, section: Решение}, {path: spec/business-rules.yaml, ids: [BR-011, BR-033]}]
+      related_requirements: [FR-001, FR-012, FR-017]
+    - id: CON-006
+      type: replay_constraint
+      status: adopted
+      statement: Replay пересчитывает историю и агрегаты, но не меняет Alert, AlertEvent или outbox и не публикует новые алерты из-за исторических точек.
+      sources: [{path: spec/business-rules.yaml, ids: [BR-036]}, {path: spec/requirements.yaml, ids: [FR-017]}]
+      related_requirements: [FR-010, FR-017]
+    - id: CON-007
+      type: aggregation_constraint
+      status: adopted
+      statement: Допустимые окна агрегации — 1m/5m/1h; для AVG хранятся sum и sampleCount. Длительность окна не равна сроку хранения агрегата.
+      sources: [{path: spec/requirements.yaml, ids: [FR-007]}, {path: spec/business-rules.yaml, ids: [BR-012, BR-037]}]
+      related_requirements: [FR-007, FR-008]
+    - id: CON-008
+      type: event_constraint
+      status: adopted
+      statement: Для внутренних Kafka-событий приняты Avro, Apicurio Registry и BACKWARD_TRANSITIVE; логические контракты не заменяют исполняемые .avsc.
+      sources: [{path: adr/0004-event-serialization.md, section: Решение}, {path: adr/0004-event-serialization.md, section: Границы решения}]
+      related_requirements: [NFR-COMP-002, NFR-COMP-003]
+    - id: CON-009
+      type: event_constraint
+      status: adopted
+      statement: Логические ключи Kafka — measurementId для raw, fingerprint ряда для normalized, политика и группа для агрегатов, alertId для алертов; ключ не означает дедупликацию.
+      sources: [{path: adr/0005-kafka-partition-keys.md, section: Решение}]
+      related_requirements: [FR-004, FR-017]
+    - id: CON-010
+      type: security_constraint
+      status: adopted
+      statement: Keycloak выдаёт удостоверения; внешние агенты имеют отдельные короткоживущие токены и TLS, внутренние сервисы — mTLS; READ и WRITE выдаются на конкретный источник, административная роль не даёт доступа ко всем данным.
+      sources: [{path: adr/0003-authentication.md, section: Решение}, {path: spec/requirements.yaml, ids: [FR-020, FR-022]}]
+      related_requirements: [FR-020, FR-021, FR-022, NFR-SEC-001, NFR-SEC-002, NFR-SEC-003]
+    - id: CON-011
+      type: security_constraint
+      status: adopted
+      statement: При недостоверной проверке права после истечения пригодности снимка Ingestion не подтверждает новые точки, а Query Service не раскрывает данные; ориентиры 5 минут / 30 секунд остаются целями проверки.
+      sources: [{path: adr/0003-authentication.md, section: Локальная проверка и отзыв}, {path: spec/architecture.yaml, section: access_control}]
+      related_requirements: [FR-020, FR-022]
+    - id: CON-012
+      type: delivery_constraint
+      status: adopted
+      statement: Приём подтверждается по каждой точке только после надёжной записи в Kafka; неизвестный исход относится к неподтверждённым. Запись Kafka не атомарна с PostgreSQL, Redis и ClickHouse.
+      sources: [{path: spec/requirements.yaml, ids: [FR-001, FR-004]}, {path: spec/events.yaml, section: adopted_constraints}]
+      related_requirements: [FR-001, FR-004, NFR-REL-001]
+    - id: CON-013
+      type: alert_constraint
+      status: adopted
+      statement: Alert, AlertEvent и outbox сохраняются одной транзакцией PostgreSQL; изменение одного Alert сериализуется, отсутствие данных само по себе не закрывает алерт.
+      sources: [{path: spec/business-rules.yaml, ids: [BR-032, BR-034]}, {path: spec/requirements.yaml, ids: [FR-010, FR-023]}]
+      related_requirements: [FR-010, FR-023]
+
+  open_questions:
+    - id: EVQ-005
+      type: open_question
+      status: open
+      statement: Исполняемые Avro-схемы, framing ID схемы, кодирование типов, порядок обновлений и поведение без реестра ещё не утверждены.
+      decision_needed: Утвердить wire-контракты и проверку совместимости для replay.
+      sources: [{path: spec/events.yaml, item_id: EVQ-005}, {path: adr/0004-event-serialization.md, section: Границы решения}]
+      related_requirements: [NFR-COMP-002, NFR-COMP-003]
+    - id: EVQ-006
+      type: open_question
+      status: open
+      statement: Число партиций, топология, кодирование составных ключей, версия fingerprint, acks/RF/min ISR и retention потоков остаются проектными; 7 дней Kafka из ADR-0002 — ориентир.
+      decision_needed: Утвердить и проверить топологию и гарантии потока для каждого типа событий.
+      sources: [{path: spec/events.yaml, item_id: EVQ-006}, {path: adr/0005-kafka-partition-keys.md, section: Границы решения}, {path: adr/0002-database-choice.md, section: Открытые вопросы}]
+      related_requirements: [FR-004, FR-005, FR-017, NFR-REL-001]
+    - id: EVQ-009
+      type: open_question
+      status: open
+      statement: Срок хранения полного raw в MinIO, формат точного исходного значения и меток, разбиение и чтение файлов не определены.
+      decision_needed: Утвердить политику raw-архива и проверить восстановление точки по measurementId после суток в ClickHouse.
+      sources: [{path: spec/events.yaml, item_id: EVQ-009}, {path: adr/0002-database-choice.md, section: Открытые вопросы}]
+      related_requirements: [FR-012, FR-013, FR-017]
+    - id: EVQ-010
+      type: open_question
+      status: open
+      statement: Устойчивый механизм проверки measurementId и содержимого до доменных эффектов, включая гонки и replay из архива, ещё не выбран.
+      decision_needed: Выбрать срок и механизм хранения сведений об ID, согласовать Processing и Storage Writer без обхода проверки.
+      sources: [{path: spec/events.yaml, item_id: EVQ-010}, {path: adr/0005-kafka-partition-keys.md, section: Решение}]
+      related_requirements: [FR-004, FR-012, FR-017, FR-018]
+    - id: EVQ-011
+      type: open_question
+      status: open
+      statement: Техническая изоляция replay от live-потока алертинга ещё не выбрана.
+      decision_needed: Выбрать отдельный маршрут или надёжный признак режима без изменения measurementId и проверить отсутствие эффектов на Alert.
+      sources: [{path: spec/events.yaml, item_id: EVQ-011}, {path: docs/services/alerting.md, section: Открытые вопросы}]
+      related_requirements: [FR-010, FR-017]
+    - id: AQ-001
+      type: open_question
+      status: open
+      statement: Ёмкостные оценки и задержки ADR-0002 не подтверждены нагрузочным испытанием.
+      decision_needed: Проверить 400 000 точек/с на 5 минут, размер raw, стоимость и скорость архивации, lag Redis и фактическую кардинальность рядов.
+      sources: [{path: adr/0002-database-choice.md, section: Открытые вопросы}, {path: docs/05-architecture.md, section: Вопросы до реализации}]
+      related_requirements: [NFR-PERF-002, NFR-PERF-003, NFR-SCALE-004, FR-013]
+    - id: AQ-002
+      type: open_question
+      status: open
+      statement: Параметры ClickHouse для целевого стенда и процедура восстановления хранилищ не утверждены.
+      decision_needed: Определить число шардов, RF, ClickHouse Keeper или ZooKeeper, RPO/RTO и процедуры восстановления каждого хранилища.
+      sources: [{path: adr/0002-database-choice.md, section: Открытые вопросы}]
+      related_requirements: [NFR-REL-001, NFR-REL-005]
+    - id: AQ-003
+      type: open_question
+      status: open
+      statement: ADR-0002 называет каталог meta.archive_object, а DBML — archive.archive_object при владении метаданными в PostgreSQL; физическое владение и удаление проверенных raw-диапазонов не согласованы.
+      decision_needed: Согласовать каталог и атомарную процедуру подтверждения архива до выборочного удаления raw из ClickHouse.
+      sources: [{path: adr/0002-database-choice.md, section: "MinIO: архив"}, {path: spec/database.dbml, table: archive.archive_object}, {path: docs/05-architecture.md, section: Вопросы до реализации}]
+      related_requirements: [FR-013, NFR-DUR-002, NFR-DUR-003]
+    - id: AQ-004
+      type: open_question
+      status: open
+      statement: Последнее значение «всегда» и ограниченный 15 минутами RedisTimeSeries могут иметь несовместимую семантику при остановке источника.
+      decision_needed: Проверить фактическое поведение retention и предусмотреть отдельное представление latest, если окно удаляет последнюю точку.
+      sources: [{path: adr/0002-database-choice.md, section: "Redis: последние значения и кэш"}, {path: docs/05-architecture.md, section: Вопросы до реализации}]
+      related_requirements: [FR-011, FR-014]
+    - id: AQ-005
+      type: open_question
+      status: open
+      statement: Для окон 1m/5m/1h ещё не определены выравнивание, закрытие окна и влияние поздних точек на опубликованные агрегаты.
+      decision_needed: Утвердить event-time границы, допустимое опоздание и правила исправления/повторной обработки окна.
+      sources: [{path: spec/business-rules.yaml, ids: [BR-006, BR-012]}, {path: docs/services/alerting.md, section: Открытые вопросы}]
+      related_requirements: [FR-007, FR-017]
+    - id: AQ-006
+      type: open_question
+      status: open
+      statement: Многоуровневое объединение перцентилей и точность/округление AVG ещё не определены; для AVG приняты sum и sampleCount, но этого недостаточно для P50/P95/P99.
+      decision_needed: Определить представление распределения, точность вычислений и правила округления результатов.
+      sources: [{path: spec/business-rules.yaml, ids: [BR-037]}, {path: spec/requirements.yaml, ids: [FR-007, FR-008]}]
+      related_requirements: [FR-007, FR-008]
+    - id: AQ-007
+      type: open_question
+      status: open
+      statement: Сроки ClickHouse и MinIO для принятых агрегатов 1m/5m/1h и отдельный срок нормализованных данных не заданы; старое предложение 1s TTL 30 дней в ADR-0002 на эти окна не распространяется.
+      decision_needed: Утвердить сроки по уровням и окнам и согласовать устаревшие фрагменты ADR-0002 с выбранными окнами без подмены принятого требования.
+      sources: [{path: adr/0002-database-choice.md, section: Решение}, {path: adr/0002-database-choice.md, section: "ClickHouse: исторические данные"}, {path: spec/database.dbml, table: ts.metric_aggregate}, {path: spec/requirements.yaml, ids: [FR-007, FR-012]}]
+      related_requirements: [FR-007, FR-012, FR-013, NFR-DUR-002]
+    - id: AQ-008
+      type: open_question
+      status: open
+      statement: Для межисточникового агрегата ещё не задано, как надёжно доказать состав источников и право READ на все его данные.
+      decision_needed: Выбрать хранение состава и проверку доступа либо запрещать такие ответы, если состав неизвестен.
+      sources: [{path: adr/0003-authentication.md, section: Последствия и границы}, {path: spec/architecture.yaml, section: access_control}]
+      related_requirements: [FR-015, FR-020]
+    - id: AQ-009
+      type: open_question
+      status: open
+      statement: Доставка версий прав и статусов, жизненный цикл сервисных сертификатов и целевые 5 минут/30 секунд требуют проектирования и испытаний.
+      decision_needed: Утвердить протокол обновления и тестами проверить отказ Keycloak/реестра, ротацию ключей, отзыв WRITE и READ на всех экземплярах.
+      sources: [{path: adr/0003-authentication.md, section: Последствия и границы}, {path: adr/0003-authentication.md, section: Критерии проверки}, {path: docs/services/ingestion.md, section: Открытые вопросы}]
+      related_requirements: [FR-020, FR-022, NFR-SEC-001, NFR-SEC-003]
+    - id: AQ-010
+      type: open_question
+      status: open
+      statement: Исполняемый OpenAPI и входной контракт агента, включая поэлементный ответ и передачу единицы измерения, ещё не заполнены.
+      decision_needed: Описать запросы, причины и retryability по точкам, ошибки разбора, статус записи неизвестен и авторизацию в spec/api.openapi.yaml.
+      sources: [{path: docs/services/ingestion.md, section: Открытые вопросы}, {path: spec/api.openapi.yaml}, {path: adr/0004-event-serialization.md, section: Решение}]
+      related_requirements: [FR-001, FR-003, FR-020, FR-022]
+    - id: AQ-011
+      type: open_question
+      status: open
+      statement: Контракт входных событий и ключ группировки для алертов, версии правил при переоценке, обработка SUSPECT, границы таймеров PENDING и nullable source требуют технического решения.
+      decision_needed: Описать снимок правил и поведение при поздних точках, истечении окна и отсутствии новых измерений, не нарушая BR-034.
+      sources: [{path: docs/services/alerting.md, section: Открытые вопросы}, {path: spec/business-rules.yaml, ids: [BR-034]}]
+      related_requirements: [FR-009, FR-010]
+    - id: AQ-012
+      type: open_question
+      status: open
+      statement: Удержание неопубликованных событий и очистка опубликованного outbox при сроке хранения AlertEvent не согласованы.
+      decision_needed: Установить порядок очистки без потери ожидающих доставки событий и проверки дублей у потребителей.
+      sources: [{path: adr/0002-database-choice.md, section: "PostgreSQL: конфигурация и состояние"}, {path: docs/services/alerting.md, section: Открытые вопросы}]
+      related_requirements: [FR-010, FR-023]
+    - id: AQ-013
+      type: open_question
+      status: open
+      statement: Точный внутренний контракт команды ручного сброса и права на её вызов в реализации ещё не оформлены.
+      decision_needed: Описать интерфейс и проверки административной роли без расширения принятых прав READ/WRITE на источник.
+      sources: [{path: docs/services/alerting.md, section: Открытые вопросы}, {path: adr/0003-authentication.md, section: Права на источники}]
+      related_requirements: [FR-020, FR-023]
+    - id: AQ-014
+      type: open_question
+      status: open
+      statement: Лимиты меток и кардинальности, а также задержки внутренних стадий алертинга требуют чисел и нагрузочной проверки.
+      decision_needed: Выбрать лимиты и проверить PostgreSQL по частоте переходов, а не по скорости входящих точек.
+      sources: [{path: docs/services/ingestion.md, section: Открытые вопросы}, {path: docs/services/alerting.md, section: Открытые вопросы}]
+      related_requirements: [NFR-SCALE-004, NFR-PERF-004]
+    - id: AQ-015
+      type: open_question
+      status: open
+      statement: Правила слияния raw и агрегатов при запросах, границы доступной истории и обновление конфигурации работников ещё не описаны как исполняемые контракты.
+      decision_needed: Уточнить протокол актуализации политик и правила полноты и объединения результатов по слоям хранения.
+      sources: [{path: docs/05-architecture.md, section: Вопросы до реализации}, {path: spec/architecture.yaml, section: subsystems}]
+      related_requirements: [FR-015, FR-017, NFR-OPS-002]

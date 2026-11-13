@@ -67,6 +67,9 @@ system:
         name: Администратор системы
         description: Управляет источниками, правилами, проблемными данными и повторной обработкой.
     external_systems:
+      - id: identity-provider
+        name: Keycloak
+        description: Провайдер удостоверений пользователей и внешних машинных агентов (ADR-0003); права READ/WRITE на источники хранятся в платформе.
       - id: visualization-system
         name: Система визуализации
       - id: notification-system
@@ -148,6 +151,12 @@ system:
       related_requirements:
         - FR-021
 
+  subsystems:
+    source: spec/architecture.yaml
+    section: architecture.subsystems
+    status: proposed
+    description: Логические контейнеры и их внутренние компоненты; описание связей и инфраструктуры находится в той же модели.
+
   domain:
     source: spec/domain.yaml
     core_entities:
@@ -181,8 +190,8 @@ system:
         - FR-002
         - FR-003
         - FR-004
-      processing:
         - FR-005
+      processing:
         - FR-006
         - FR-007
         - FR-008
@@ -232,7 +241,7 @@ system:
 
   business_rules:
     source: spec/business-rules.yaml
-    total: 29
+    total: 37
     key_rules:
       - BR-001
       - BR-002
@@ -246,6 +255,12 @@ system:
       - BR-020
       - BR-024
       - BR-025
+      - BR-030
+      - BR-031
+      - BR-032
+      - BR-033
+      - BR-036
+      - BR-037
 
   use_cases:
     source: spec/use-cases.yaml
@@ -270,7 +285,7 @@ system:
         name: Ручной сброс алерта
 
   data_flow:
-    description: Логический поток обработки телеметрии без фиксации конкретных технологий.
+    description: Логический поток обработки телеметрии; после обработки хранение и live-оценка алертов являются независимыми ветвями, а не последовательной транзакцией.
     steps:
       - order: 1
         name: Collection
@@ -283,18 +298,24 @@ system:
         description: Принятые данные надёжно фиксируются и сглаживают всплески нагрузки.
       - order: 4
         name: Processing
-        description: Данные нормализуются, агрегируются и проверяются правилами алертинга.
+        description: Проверяется идентичность и исходное содержимое точек, данные нормализуются и агрегируются; конфликтующие версии изолируются.
       - order: 5
         name: Storage
         description: Последние, исторические и архивные данные сохраняются согласно политике хранения.
       - order: 6
+        name: Alerting
+        description: Live-данные оцениваются по активным правилам; replay не меняет состояние и историю алертов.
+      - order: 7
         name: Query and visualization
         description: Пользователи и внешние системы получают данные через программный интерфейс.
-      - order: 7
+      - order: 8
         name: Alert delivery
         description: События алертинга становятся доступны получателям и внешним системам.
 
   integrations:
+    identity_provider:
+      system: Keycloak
+      purpose: Выдача удостоверений пользователям и внешним агентам; авторитетные права на источники находятся в PostgreSQL платформы (ADR-0003).
     inbound:
       - Источники телеметрии
       - Агенты сбора метрик
@@ -309,7 +330,6 @@ system:
     context: diagrams/context.mmd
     containers: diagrams/containers.mmd
     components: diagrams/components.mmd
-    sequence_create_order_legacy_name: diagrams/sequence-create-order.mmd
     states:
       TelemetrySource: diagrams/state-telemetry-source.mmd
       MetricDefinition: diagrams/state-metric-definition.mmd
@@ -337,6 +357,8 @@ system:
 
   specifications:
     architecture: spec/architecture.yaml
+    assumptions: spec/assumptions.yaml
+    glossary: spec/glossary.yaml
     domain: spec/domain.yaml
     requirements: spec/requirements.yaml
     non_functional_requirements: spec/non-functional-requirements.yaml
@@ -364,6 +386,8 @@ system:
         - UC-001
       FR-004:
         - UC-001
+      FR-005:
+        - UC-007
       FR-007:
         - UC-003
       FR-008:
@@ -375,6 +399,8 @@ system:
         - UC-009
       FR-011:
         - UC-002
+      FR-012:
+        - UC-003
       FR-014:
         - UC-002
         - UC-004
@@ -401,8 +427,8 @@ system:
         - UC-009
 
   open_items:
-    - Утвердить проектную декомпозицию компонентов и уточнить контракты их взаимодействия в docs/05-architecture.md.
-    - Сформировать OpenAPI-контракт.
-    - Описать событийные контракты.
-    - Описать физическую модель данных после выбора хранилищ.
-    - Заполнить ADR с принятыми архитектурными решениями.
+    - Утвердить проектную декомпозицию spec/architecture.yaml и контракты взаимодействия компонентов.
+    - Заполнить исполняемый OpenAPI-контракт spec/api.openapi.yaml.
+    - Подготовить исполняемые схемы Avro и закрыть оставшиеся вопросы EVQ-* в spec/events.yaml.
+    - Утвердить сроки хранения raw-архива и агрегатов по окнам, а также правила поздних точек и точности расчётов.
+    - Проверить целевые времена токенов, свежести снимка прав и отзыва доступа по ADR-0003.
