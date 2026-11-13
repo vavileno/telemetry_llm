@@ -1,7 +1,7 @@
 // Физическая модель данных системы телеметрии.
 //
 // Источники истины:
-//   - spec/domain.yaml           — сущности, поля, перечисления, инварианты INV-001..INV-006;
+//   - spec/domain.yaml           — сущности, поля, связи, перечисления и инварианты;
 //   - docs/01-domain-model.md    — связи сущностей;
 //   - docs/00-product-overview.md, docs/11-glossary.md — распределение данных по хранилищам;
 //   - spec/requirements.yaml     — FR-011..FR-013, FR-017, FR-018;
@@ -9,11 +9,11 @@
 //   - adr/0002-database-choice.md — выбор хранилищ, сроки хранения, физические параметры.
 //
 // Логические схемы и хранилища:
-//   meta    — конфигурация, состояние алертинга, операционные данные.
+//   meta    — конфигурация, состояние алертинга, операционные данные и каталог архива.
 //             PostgreSQL 16 (ADR-0002).
 //   ts      — исторические данные: исходные измерения и агрегаты. ClickHouse.
 //   latest  — последние значения временных рядов. Redis.
-//   archive — каталог архивных объектов длительного хранения. MinIO.
+//   объекты архива хранятся в MinIO; их каталог находится в meta (PostgreSQL).
 //
 // Соглашения по представлению доменных типов:
 //   - map<string, string> в meta   — отдельная таблица-словарь (составной PK из ключа и владельца);
@@ -27,9 +27,8 @@
 // Отличия от spec/domain.yaml (только физические детали, помечены комментарием «тех.»):
 //   - labels_fingerprint — hash набора меток, обеспечивает уникальность строки
 //     «правило/политика + набор меток» (BR-009, BR-011);
-//   - archive_object и его статусы — в domain.yaml отсутствуют, нужны для FR-013;
-//   - alert_event_outbox — техническая очередь публикации, не отдельное доменное событие (BR-032);
-//   - source_access_grant — техническая привязка субъекта Keycloak к источнику и праву READ/WRITE (ADR-0003);
+//   - archive_object, alert_event_outbox и source_access_grant — технические сущности domain.yaml,
+//     описывающие каталог, очередь публикации и права; здесь заданы физические колонки и индексы;
 //   - MetricAggregate.function назван aggregation_function: FUNCTION зарезервирован в SQL.
 //
 // Физические параметры ts (движок, партиционирование, порядок сортировки, TTL)
@@ -161,14 +160,14 @@ enum replay_job_status {
   CANCELLED
 }
 
-// тех. Перечисления отсутствуют в domain.yaml, нужны для FR-013 (архивирование).
+// тех. domain.yaml: ArchiveStatus (FR-013).
 enum archive_status {
   PENDING
   COMPLETED
   FAILED
 }
 
-// тех.
+// тех. domain.yaml: ArchiveDataKind.
 enum archive_data_kind {
   RAW_SAMPLES
   AGGREGATES
@@ -550,12 +549,11 @@ Table latest.metric_value {
 
 
 // ============================================================================
-// Схема archive — каталог архивных объектов (MinIO)
+// Каталог архивных объектов — схема meta (PostgreSQL); объекты — в MinIO
 // ============================================================================
 
-// tech. Метаданные объектов длительного хранения; сами данные лежат в MinIO.
-// Сущность отсутствует в domain.yaml, требуется для FR-013.
-Table archive.archive_object {
+// tech. domain.yaml: ArchiveObject. Метаданные в PostgreSQL; сами данные лежат в MinIO.
+Table meta.archive_object {
   id uuid [pk]
   object_key varchar [not null, unique, note: 'ключ объекта в хранилище MinIO']
   data_kind archive_data_kind [not null, note: 'RAW_SAMPLES для полного исходника; AGGREGATES отдельно']
@@ -576,7 +574,7 @@ Table archive.archive_object {
   checks {
     // INV-002: границы архивируемого диапазона
     `range_started_at < range_ended_at` [name: 'chk_archive_range']
-    // INV-005 по аналогии с ReplayJob: успешное завершение фиксируется временем
+    // Для подтверждения успешного завершения архивирования фиксируется время
     `status <> 'COMPLETED' or completed_at is not null` [name: 'chk_archive_completed_at']
   }
   note: 'MinIO bucket telemetry-archive, Parquet + ZSTD; отдельные объекты RAW_SAMPLES и AGGREGATES (ADR-0002). Удаление исходных точек из ClickHouse допустимо только после подтверждения полноты и checksum RAW_SAMPLES, archive_object.status = COMPLETED (FR-013); запись каталога сама по себе не включает безопасный TTL.'

@@ -363,6 +363,129 @@ entities:
         type: datetime
         nullable: true
 
+  SourceAccessGrant:
+    kind: technical
+    description: Привязка субъекта Keycloak к праву READ или WRITE на зарегистрированный источник; владелец — Control Service, источник истины — PostgreSQL (ADR-0003).
+    identity: [principalIssuer, principalId, source, permission]
+    fields:
+      principalIssuer:
+        type: string
+        required: true
+      principalId:
+        type: string
+        required: true
+        description: Стабильный идентификатор субъекта, не отображаемое имя.
+      source:
+        type: TelemetrySource
+        required: true
+      permission:
+        type: SourceAccessPermission
+        required: true
+      createdAt:
+        type: datetime
+        required: true
+      updatedAt:
+        type: datetime
+        required: true
+
+  AlertEventOutbox:
+    kind: technical
+    description: Запись асинхронной публикации AlertEvent с неизменным eventId; создаётся вместе с Alert и AlertEvent одной транзакцией PostgreSQL (BR-032).
+    identity: [alertEvent]
+    fields:
+      alertEvent:
+        type: AlertEvent
+        required: true
+        description: Идентификатор записи равен AlertEvent.id и eventId публикуемого события.
+      payload:
+        type: json
+        required: true
+        description: Неизменяемый снимок события для повторной публикации.
+      status:
+        type: AlertOutboxStatus
+        required: true
+      createdAt:
+        type: datetime
+        required: true
+      nextAttemptAt:
+        type: datetime
+        required: true
+      attemptCount:
+        type: integer
+        required: true
+      publishedAt:
+        type: datetime
+        nullable: true
+      lastError:
+        type: text
+        nullable: true
+
+  ArchiveObject:
+    kind: technical
+    description: Каталожная запись об объекте raw или агрегатов в MinIO; метаданные и статус проверки принадлежат PostgreSQL (ADR-0002, FR-013), но не являются содержимым объекта.
+    fields:
+      id:
+        type: UUID
+      objectKey:
+        type: string
+        required: true
+        unique: true
+      dataKind:
+        type: ArchiveDataKind
+        required: true
+      rangeStartedAt:
+        type: datetime
+        required: true
+      rangeEndedAt:
+        type: datetime
+        required: true
+      format:
+        type: string
+        required: true
+      recordCount:
+        type: integer
+        nullable: true
+      sizeBytes:
+        type: integer
+        nullable: true
+      checksum:
+        type: string
+        required: true
+      status:
+        type: ArchiveStatus
+        required: true
+      failureReason:
+        type: text
+        nullable: true
+      createdAt:
+        type: datetime
+        required: true
+      completedAt:
+        type: datetime
+        nullable: true
+
+# Зависимый объект -> объект ссылки. Кратности описывают связи по полям,
+# а не число физических строк в разных хранилищах или правила удаления.
+relationships:
+  - {from: TimeSeries, field: metricDefinition, to: MetricDefinition, per_from: one, per_to: zero_or_many}
+  - {from: TimeSeries, field: source, to: TelemetrySource, per_from: one, per_to: zero_or_many}
+  - {from: MetricSample, field: timeSeries, to: TimeSeries, per_from: one, per_to: zero_or_many}
+  - {from: AggregationPolicy, field: metricDefinition, to: MetricDefinition, per_from: one, per_to: zero_or_many}
+  - {from: MetricAggregate, field: policy, to: AggregationPolicy, per_from: one, per_to: zero_or_many}
+  - {from: MetricAggregate, field: metricDefinition, to: MetricDefinition, per_from: one, per_to: zero_or_many}
+  - {from: MetricAggregate, field: source, to: TelemetrySource, per_from: zero_or_one, per_to: zero_or_many, note: При нескольких источниках source отсутствует; состав исходных источников пока не моделируется (AQ-008).}
+  - {from: AlertRule, field: metricDefinition, to: MetricDefinition, per_from: one, per_to: zero_or_many}
+  - {from: Alert, field: rule, to: AlertRule, per_from: one, per_to: zero_or_many}
+  - {from: Alert, field: source, to: TelemetrySource, per_from: zero_or_one, per_to: zero_or_many}
+  - {from: AlertEvent, field: alert, to: Alert, per_from: one, per_to: zero_or_many}
+  - {from: SourceAccessGrant, field: source, to: TelemetrySource, per_from: one, per_to: zero_or_many}
+  - {from: AlertEventOutbox, field: alertEvent, to: AlertEvent, per_from: one, per_to: zero_or_one, note: Запись создаётся при переходе, но может быть очищена после публикации; PENDING нельзя удалять без подтверждения.}
+
+modeling_notes:
+  - ArchiveObject описывает диапазон и тип данных; прямой связи каталожной записи с каждой исходной точкой или агрегатом нет (FR-013).
+  - Redis latest — производная проекция TimeSeries, а не самостоятельная доменная сущность; таблицы-словари DBML реализуют поля map и list.
+  - Состав источников межисточникового MetricAggregate остаётся вопросом AQ-008; проверка READ без доказанного состава запрещает выдачу (ADR-0003).
+
 value_objects:
   ActorReference:
     description: Ссылка на пользователя или внешний субъект, выполнивший действие.
@@ -378,6 +501,23 @@ value_objects:
         nullable: true
 
 enums:
+  SourceAccessPermission:
+    - READ
+    - WRITE
+
+  AlertOutboxStatus:
+    - PENDING
+    - PUBLISHED
+
+  ArchiveStatus:
+    - PENDING
+    - COMPLETED
+    - FAILED
+
+  ArchiveDataKind:
+    - RAW_SAMPLES
+    - AGGREGATES
+
   SourceType:
     - HOST
     - MICROSERVICE
@@ -476,13 +616,32 @@ enums:
 invariants:
   - id: INV-001
     description: Временной ряд однозначно определяется метрикой, источником и набором меток.
+    applies_to: [TimeSeries, MetricDefinition, TelemetrySource]
+    rules: [BR-009]
   - id: INV-002
     description: Время начала любого временного диапазона должно предшествовать времени его окончания.
+    applies_to: [MetricAggregate, ReplayJob, ArchiveObject]
+    rules: [BR-012]
   - id: INV-003
     description: Более старое измерение не может заменить последнее известное значение временного ряда.
+    applies_to: [TimeSeries, MetricSample]
+    rules: [BR-010]
   - id: INV-004
     description: Событие алертинга создаётся только при изменении состояния алерта.
+    applies_to: [Alert, AlertEvent, AlertEventOutbox]
+    rules: [BR-018, BR-032]
   - id: INV-005
     description: Завершённое задание повторной обработки имеет время завершения.
+    applies_to: [ReplayJob]
   - id: INV-006
     description: Неактивное правило алертинга не участвует в вычислении состояния алертов.
+    applies_to: [AlertRule, Alert]
+    rules: [BR-016]
+  - id: INV-007
+    description: Полный raw не удаляется из ClickHouse до проверки полноты, checksum и каталога соответствующего RAW_SAMPLES-архива.
+    applies_to: [MetricSample, ArchiveObject]
+    rules: [BR-031]
+  - id: INV-008
+    description: Alert, неизменяемый AlertEvent и запись outbox при переходе сохраняются в одной транзакции PostgreSQL с общим eventId.
+    applies_to: [Alert, AlertEvent, AlertEventOutbox]
+    rules: [BR-032]

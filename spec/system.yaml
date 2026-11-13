@@ -180,6 +180,8 @@ system:
       - INV-004
       - INV-005
       - INV-006
+      - INV-007
+      - INV-008
 
   functional_requirements:
     source: spec/requirements.yaml

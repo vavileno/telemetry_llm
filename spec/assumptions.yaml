@@ -180,9 +180,9 @@ assumptions_registry:
     - id: AQ-003
       type: open_question
       status: open
-      statement: ADR-0002 называет каталог meta.archive_object, а DBML — archive.archive_object при владении метаданными в PostgreSQL; физическое владение и удаление проверенных raw-диапазонов не согласованы.
-      decision_needed: Согласовать каталог и атомарную процедуру подтверждения архива до выборочного удаления raw из ClickHouse.
-      sources: [{path: adr/0002-database-choice.md, section: "MinIO: архив"}, {path: spec/database.dbml, table: archive.archive_object}, {path: docs/05-architecture.md, section: Вопросы до реализации}]
+      statement: Каталог meta.archive_object закреплён за PostgreSQL, сами объекты — в MinIO; механизм выборочного удаления проверенных raw-диапазонов ещё не согласован.
+      decision_needed: Спроектировать безопасную процедуру подтверждения архива до выборочного удаления raw из ClickHouse.
+      sources: [{path: adr/0002-database-choice.md, section: "MinIO: архив"}, {path: spec/database.dbml, table: meta.archive_object}, {path: docs/05-architecture.md, section: Вопросы до реализации}]
       related_requirements: [FR-013, NFR-DUR-002, NFR-DUR-003]
     - id: AQ-004
       type: open_question
