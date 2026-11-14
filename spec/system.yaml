@@ -360,6 +360,7 @@ system:
   specifications:
     architecture: spec/architecture.yaml
     data_ownership: spec/data-ownership.yaml
+    integration_patterns: spec/integration-patterns.yaml
     assumptions: spec/assumptions.yaml
     glossary: spec/glossary.yaml
     domain: spec/domain.yaml

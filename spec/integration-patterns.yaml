@@ -1,0 +1,224 @@
+# Машиночитаемый указатель на семантику предложенных связей architecture.connections.
+# Принятые гарантии берутся из ADR/FR/BR и data-ownership; деталей транспорта,
+# подтверждений, повторов и контрактов, не утверждённых в источниках, здесь нет.
+integration_patterns:
+  id: telemetry-platform-integration-patterns
+  status: draft
+  sources:
+    topology: spec/architecture.yaml
+    events: spec/events.yaml
+    ownership_and_boundaries: spec/data-ownership.yaml
+    open_questions: spec/assumptions.yaml
+  conventions:
+    - status proposed относится к маршруту из architecture.connections; ссылки на принятые правила не делают маршрут или его протокол утверждённым.
+    - status adopted у гарантии означает нормативное ограничение из источника, а не подтверждённую реализацию или испытание.
+    - connection_ids перечисляют предложенные стрелки, а не закрытый allowlist допустимых сетевых вызовов.
+    - acknowledgement описывает точку подтверждения, не гарантию завершения downstream; not_specified не означает успех или запрет повтора.
+    - retry со статусом open или not_specified не задаёт число попыток, backoff, тайм-аут или retention.
+    - boundary_ids ссылаются на spec/data-ownership.yaml; описания событий и ключи — на spec/events.yaml и ADR-0005.
+    - Направление стрелки при mode read может обозначать поток данных от хранилища к читателю; инициатор сетевого вызова этим не утверждается.
+
+  patterns:
+    - id: IP-001
+      status: proposed
+      kind: synchronous_ingestion
+      connection_ids: [send_metrics]
+      delivery: {status: adopted, meaning: Подтверждённая точка надёжно зафиксирована в Kafka; обработка downstream этим не гарантируется.}
+      adopted_constraints: [AC-001, AC-009]
+      boundary_ids: [ACK-001]
+      acknowledgement: {status: adopted, meaning: Успех по точке только после надёжной записи в Kafka; неизвестный исход остаётся неподтверждённым.}
+      retry: {status: adopted, meaning: При неизвестном исходе записи агент повторяет точку с тем же measurementId; ошибки валидации не становятся автоматически повторяемыми.}
+      consistency: {status: adopted, meaning: Подтверждение Kafka не означает наличия точки в истории или latest.}
+      unresolved: [AQ-010, EVQ-006]
+    - id: IP-002
+      status: proposed
+      kind: asynchronous_raw_publication
+      connection_ids: [publish_raw]
+      delivery: {status: adopted, meaning: Публикация подтверждается только при надёжной фиксации Kafka; конфигурация репликации ещё открыта.}
+      adopted_constraints: [AC-007, AC-008, AC-009]
+      boundary_ids: [ACK-001, CS-001]
+      acknowledgement: {status: adopted, meaning: Ingestion подтверждает точку только после надёжной фиксации её сообщения в Kafka.}
+      retry: {status: open, meaning: Политика подтверждений и границы повторов Kafka требуют решения; ключ measurementId не является дедупликацией.}
+      consistency: {status: adopted, meaning: Публикация не атомарна с записью в PostgreSQL, ClickHouse и Redis.}
+      unresolved: [EVQ-005, EVQ-006]
+    - id: IP-003
+      status: proposed
+      kind: asynchronous_raw_consumption
+      connection_ids: [consume_raw_history]
+      delivery: {status: open, meaning: Доставка возможна повторно; согласование проверки ID и записи истории не выбрано (EVQ-010).}
+      adopted_constraints: [AC-002, AC-007, AC-008]
+      boundary_ids: [CS-001]
+      acknowledgement: {status: open, meaning: Момент фиксации обработки и согласование с проверкой ID ещё не выбраны.}
+      retry: {status: open, meaning: Повтор и конфликт по measurementId не могут обходить проверку исходного содержимого.}
+      consistency: {status: adopted, meaning: Непроверенный raw не создаёт историю или другие доменные эффекты.}
+      unresolved: [EVQ-006, EVQ-010]
+    - id: IP-004
+      status: proposed
+      kind: asynchronous_processed_events
+      connection_ids: [publish_normalized_for_storage, publish_normalized_for_alerting, publish_aggregates_for_storage, publish_aggregates_for_alerting]
+      delivery: {status: open, meaning: Топология и параметры потоков и изоляция replay ещё не утверждены (EVQ-006, EVQ-011).}
+      adopted_constraints: [AC-002, AC-005, AC-007, AC-008]
+      boundary_ids: [CS-001]
+      acknowledgement: {status: open, meaning: Топология потоков, consumer acknowledgements и изоляция ошибок ещё не утверждены.}
+      retry: {status: open, meaning: Повтор доставки не разрешает создавать повторный доменный результат.}
+      consistency: {status: adopted, meaning: Результаты replay не должны попадать в live-оценку алертов; запись хранилищ не атомарна с Kafka.}
+      unresolved: [EVQ-005, EVQ-006, EVQ-011]
+    - id: IP-005
+      status: proposed
+      kind: storage_projections
+      connection_ids: [persist_history, persist_latest]
+      delivery: {status: open, meaning: Повторная доставка допустима; устойчивое согласование проверки raw и приёмников ещё не выбрано (EVQ-010).}
+      adopted_constraints: [AC-002, AC-003]
+      boundary_ids: [CS-001]
+      acknowledgement: {status: open, meaning: Порядок фиксации записи и смещений потребителя пока не выбран.}
+      retry: {status: adopted, meaning: Повтор с тем же содержимым не создаёт второй доменный результат; более старое значение не заменяет latest.}
+      consistency: {status: adopted, meaning: Kafka, ClickHouse и Redis не входят в одну атомарную транзакцию.}
+      unresolved: [EVQ-010]
+    - id: IP-006
+      status: proposed
+      kind: configuration_reads
+      connection_ids: [read_configuration_ingestion, read_grants_query, read_configuration_processing, read_configuration_alerting]
+      delivery: {status: not_applicable, meaning: Чтение или обновление снимка конфигурации не является доставкой события; способ распространения прав открыт.}
+      adopted_constraints: [AC-001]
+      boundary_ids: []
+      acknowledgement: {status: not_applicable, meaning: Чтение конфигурации не подтверждает приём точки или обработку события.}
+      retry: {status: not_specified, meaning: Интерфейс и повтор чтения конфигурации не утверждены.}
+      consistency: {status: adopted, meaning: При недостоверной проверке WRITE приём не подтверждается; при недостоверной проверке READ данные не раскрываются.}
+      unresolved: [AQ-009]
+    - id: IP-007
+      status: proposed
+      kind: operational_postgres_writes
+      connection_ids: [record_failure, manage_configuration, replay_progress]
+      delivery: {status: not_specified, meaning: Для трёх разных операций не утверждена общая гарантия доставки команды.}
+      adopted_constraints: []
+      source_refs: [FR-017, FR-018, FR-021]
+      boundary_ids: []
+      acknowledgement: {status: not_specified, meaning: Момент подтверждения каждой административной или операционной записи не описан единым контрактом.}
+      retry: {status: not_specified, meaning: Технические правила повторов отдельных операций не утверждены.}
+      consistency: {status: proposed, meaning: Писатели и ограничение прогресса ReplayJob описаны в data-ownership; общая транзакция этих трёх операций не утверждается.}
+      unresolved: []
+    - id: IP-008
+      status: proposed
+      kind: alert_reset_command
+      connection_ids: [reset_alert]
+      delivery: {status: not_specified, meaning: Транспорт команды Control → Alerting не утверждён; подтверждение сброса определяется транзакцией Alerting.}
+      adopted_constraints: [AC-006]
+      boundary_ids: [TX-001]
+      acknowledgement: {status: adopted, meaning: Ручной сброс подтверждается только после фиксации перехода, AlertEvent и outbox, не после доставки.}
+      retry: {status: not_specified, meaning: Протокол команды и политика её технических повторов не утверждены; повтор не должен создавать лишний переход.}
+      consistency: {status: adopted, meaning: Фактический переход сохраняется одной транзакцией PostgreSQL.}
+      unresolved: [AQ-013]
+    - id: IP-009
+      status: proposed
+      kind: alert_transaction
+      connection_ids: [persist_alert]
+      delivery: {status: not_applicable, meaning: Локальная транзакция PostgreSQL не является доставкой сообщения в Kafka.}
+      adopted_constraints: [AC-006]
+      boundary_ids: [TX-001]
+      acknowledgement: {status: adopted, meaning: Успех перехода только после фиксации транзакции PostgreSQL.}
+      retry: {status: adopted, meaning: После блокировки строки актуальное состояние повторно проверяется; событие создаётся только при фактическом переходе.}
+      consistency: {status: adopted, meaning: Alert, AlertEvent и outbox сохраняются или откатываются вместе; Kafka вне транзакции.}
+      unresolved: []
+    - id: IP-010
+      status: proposed
+      kind: alert_outbox_publication
+      connection_ids: [read_outbox, publish_alert]
+      delivery: {status: adopted, meaning: Публикация после транзакции асинхронна и допускает повтор того же eventId; доставка внешнему адресату не гарантируется этим этапом.}
+      adopted_constraints: [AC-006, AC-007, AC-008]
+      boundary_ids: [TX-001, CS-001]
+      acknowledgement: {status: adopted, meaning: Фиксация перехода в PostgreSQL не означает публикации сообщения в Kafka.}
+      retry: {status: adopted, meaning: Повторная публикация использует тот же eventId и payload; возможен дубликат у потребителя.}
+      consistency: {status: adopted, meaning: Публикация из outbox асинхронна относительно транзакции перехода.}
+      unresolved: [EVQ-005, EVQ-006, AQ-012]
+    - id: IP-011
+      status: proposed
+      kind: external_alert_delivery
+      connection_ids: [deliver_notification, deliver_incident]
+      delivery: {status: not_specified, meaning: Гарантия доставки внешними системами не утверждена.}
+      adopted_constraints: []
+      boundary_ids: [TX-001]
+      acknowledgement: {status: not_specified, meaning: Протокол подтверждения внешними получателями не утверждён; запись AlertEvent не доказывает доставку.}
+      retry: {status: not_specified, meaning: Каналы и политика повторов внешней системы остаются вне платформы.}
+      consistency: {status: adopted, meaning: Сбой внешней доставки не откатывает зафиксированный переход Alert.}
+      unresolved: []
+    - id: IP-012
+      status: proposed
+      kind: synchronous_queries
+      connection_ids: [query_operator, query_visualization, query_analytics]
+      delivery: {status: not_applicable, meaning: Ответ на запрос не является доставкой события с гарантией последующей обработки.}
+      adopted_constraints: [AC-001]
+      source_refs: [FR-015]
+      boundary_ids: []
+      acknowledgement: {status: not_specified, meaning: Формат и коды ответов относятся к будущему OpenAPI.}
+      retry: {status: not_specified, meaning: Повтор запросов клиентами и тайм-ауты не утверждены.}
+      consistency: {status: adopted, meaning: READ проверяется до доступа к любому слою и кешу; неполный результат не выдаётся за полный.}
+      unresolved: [AQ-008, AQ-010]
+    - id: IP-013
+      status: proposed
+      kind: query_store_access
+      connection_ids: [query_latest, query_cache, query_history, query_archive]
+      delivery: {status: not_applicable, meaning: Чтение разных слоёв не является доставкой сообщения или подтверждением записи.}
+      adopted_constraints: [AC-001]
+      source_refs: [ADR-0002]
+      boundary_ids: [CS-001]
+      acknowledgement: {status: not_applicable, meaning: Чтение слоя не является подтверждением доставки или записи точки.}
+      retry: {status: not_specified, meaning: Тайм-ауты и повтор чтения отдельных слоёв не утверждены.}
+      consistency: {status: adopted, meaning: Между уровнями возможна eventual consistency; Query Service не обходит READ и сообщает о неполной истории.}
+      unresolved: [AQ-004, AQ-008, AQ-015, EVQ-009]
+    - id: IP-014
+      status: proposed
+      kind: administrative_request
+      connection_ids: [administer]
+      delivery: {status: not_specified, meaning: Общий контракт выполнения различных административных операций ещё не утверждён.}
+      adopted_constraints: []
+      source_refs: [ADR-0003, BR-024, FR-020]
+      boundary_ids: []
+      acknowledgement: {status: not_specified, meaning: Ответы отдельных административных операций должны быть определены их контрактами; право роли не даёт READ/WRITE ко всем источникам.}
+      retry: {status: not_specified, meaning: Общая политика повторов административных запросов не утверждена.}
+      consistency: {status: adopted, meaning: Управление доступно только авторизованным субъектам, успешные и отклонённые действия аудируются.}
+      unresolved: [AQ-010]
+    - id: IP-015
+      status: proposed
+      kind: replay_command
+      connection_ids: [start_replay]
+      delivery: {status: not_specified, meaning: Доставка команды и отдельный результат ReplayJob не определены одним контрактом.}
+      adopted_constraints: [AC-005]
+      boundary_ids: []
+      acknowledgement: {status: not_specified, meaning: Фиксация задания и начало выполнения не определены как один синхронный результат.}
+      retry: {status: not_specified, meaning: Протокол команды и технический повтор запуска не утверждены.}
+      consistency: {status: adopted, meaning: Задание replay не даёт права менять Alert, AlertEvent и outbox.}
+      unresolved: [EVQ-011]
+    - id: IP-016
+      status: proposed
+      kind: replay_source_reads
+      connection_ids: [replay_from_kafka, replay_from_archive]
+      delivery: {status: open, meaning: Доступность зависит от retention Kafka и пока не назначенного срока raw в MinIO.}
+      adopted_constraints: [AC-005]
+      source_refs: [BR-011, FR-017]
+      boundary_ids: []
+      acknowledgement: {status: not_applicable, meaning: Чтение доступного диапазона не подтверждает завершение ReplayJob.}
+      retry: {status: not_specified, meaning: Параметры чтения и восстановления при сбоях пока не утверждены.}
+      consistency: {status: adopted, meaning: Исходный measurementId сохраняется при replay; доступность зависит от сроков хранения соответствующего слоя.}
+      unresolved: [EVQ-006, EVQ-009]
+    - id: IP-017
+      status: proposed
+      kind: replay_reprocessing
+      connection_ids: [replay_to_processing]
+      delivery: {status: open, meaning: Маршрут повторной обработки и изоляция от live-потока ещё не утверждены.}
+      adopted_constraints: [AC-002, AC-005]
+      boundary_ids: [CS-001]
+      acknowledgement: {status: not_specified, meaning: Маршрут и момент подтверждения пересчёта ещё не утверждены.}
+      retry: {status: adopted, meaning: Тот же measurementId и исходное содержимое не создают второй доменный результат.}
+      consistency: {status: adopted, meaning: История и агрегаты пересчитываются без изменений live-алертов.}
+      unresolved: [EVQ-010, EVQ-011]
+    - id: IP-018
+      status: proposed
+      kind: verified_archiving
+      connection_ids: [archive_from_history, archive_objects, archive_catalog]
+      delivery: {status: open, meaning: Безопасный порядок проверки принят, но механизм выборочного удаления и восстановления при сбое требует AQ-003.}
+      adopted_constraints: [AC-004]
+      boundary_ids: [CS-002]
+      acknowledgement: {status: adopted, meaning: Удаление полного raw разрешается только после проверки полноты, checksum и подтверждения каталога RAW_SAMPLES.}
+      retry: {status: adopted, meaning: При ошибке архивирования полный raw остаётся в ClickHouse и допускается повторный запуск архивации.}
+      consistency: {status: adopted, meaning: Объект MinIO и каталог PostgreSQL проверяются до удаления raw; единой транзакции трёх хранилищ не обещано.}
+      unresolved: [AQ-003, EVQ-009]

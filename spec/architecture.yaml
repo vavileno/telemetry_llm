@@ -11,6 +11,7 @@ architecture:
     rules: spec/business-rules.yaml
     domain: spec/domain.yaml
     events: spec/events.yaml
+    integration_patterns: spec/integration-patterns.yaml
     data_model: spec/database.dbml
     architecture_description: docs/05-architecture.md
     container_diagram: diagrams/containers.mmd
