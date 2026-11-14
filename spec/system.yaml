@@ -359,6 +359,7 @@ system:
 
   specifications:
     architecture: spec/architecture.yaml
+    data_ownership: spec/data-ownership.yaml
     assumptions: spec/assumptions.yaml
     glossary: spec/glossary.yaml
     domain: spec/domain.yaml
@@ -377,6 +378,12 @@ system:
       - adr/0003-authentication.md
       - adr/0004-event-serialization.md
       - adr/0005-kafka-partition-keys.md
+    machine_readable_index:
+      - decisions/ADR-0001.yaml
+      - decisions/ADR-0002.yaml
+      - decisions/ADR-0003.yaml
+      - decisions/ADR-0004.yaml
+      - decisions/ADR-0005.yaml
 
   traceability:
     requirements_to_use_cases:

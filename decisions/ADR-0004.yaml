@@ -1,0 +1,26 @@
+# Машиночитаемый указатель; первичный текст решения — source.
+decision_record:
+  id: ADR-0004
+  status: accepted
+  date: 2026-11-04
+  source: adr/0004-event-serialization.md
+  scope: Внутренние Kafka-события, не внешний API агента или Parquet-архив.
+  rationale: Потребителям необходимо читать прежние версии событий при replay без обращения в реестр для каждой точки.
+  decisions:
+    - subject: serialization
+      choice: Avro, отдельная версионируемая схема для каждого типа внутреннего события.
+      source_section: Решение
+    - subject: schema_registry
+      choice: Self-hosted Apicurio Registry; запись Kafka содержит ID зарегистрированной схемы, по которому потребитель её выбирает.
+      source_section: Решение
+    - subject: compatibility
+      choice: BACKWARD_TRANSITIVE для каждого типа события; схемы в репозитории проверяются в CI и регистрируются до запуска отправителей.
+      source_section: Решение
+  alternatives:
+    status: not_documented
+    items: []
+  consequences:
+    - BACKWARD_TRANSITIVE не гарантирует, что старый потребитель прочтёт новое сообщение без согласованного обновления.
+    - Примеры в spec/events.yaml не являются исполняемыми wire-контрактами.
+  references: [FR-017, NFR-COMP-002, NFR-COMP-003]
+  open_questions: [EVQ-005]

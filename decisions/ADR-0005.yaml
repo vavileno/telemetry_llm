@@ -1,0 +1,38 @@
+# Машиночитаемый указатель; первичный текст решения — source.
+decision_record:
+  id: ADR-0005
+  status: accepted
+  date: 2026-11-05
+  source: adr/0005-kafka-partition-keys.md
+  scope: Логические ключи внутренних событий Kafka; не топология, число партиций или кодирование ключа.
+  rationale: Разные этапы требуют порядка по ID точки, временному ряду, группе агрегации или алерту; один ключ на все этапы не решает эти задачи.
+  decisions:
+    - subject: MetricAccepted
+      stream: metrics.raw
+      key_fields: [measurementId]
+      ordering_scope: Публикации одной точки внутри партиции.
+      source_section: Решение
+    - subject: MetricNormalized
+      stream: metrics.normalized
+      key_fields: [timeSeriesFingerprint]
+      ordering_scope: Точки одного нормализованного ряда внутри партиции.
+      source_section: Решение
+    - subject: MetricAggregateCalculated
+      stream: aggregate_streams
+      key_fields: [policyId, metricDefinitionId, sourceId, labels]
+      nullable_key_fields: [sourceId]
+      ordering_scope: Результаты одной политики и группы внутри партиции; функция и окно не входят в ключ.
+      source_section: Решение
+    - subject: AlertStateChanged
+      stream: alerts
+      key_fields: [alertId]
+      ordering_scope: События одного алерта внутри партиции.
+      source_section: Решение
+  alternatives:
+    status: not_documented
+    items: []
+  consequences:
+    - Между raw и обработанным потоком требуется перегруппировка после проверки measurementId.
+    - Ключ партиции не дедуплицирует сообщения и не заменяет проверку содержимого точки.
+  references: [BR-009, BR-010, BR-011, BR-032, BR-033]
+  open_questions: [EVQ-005, EVQ-006, EVQ-010]

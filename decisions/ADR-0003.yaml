@@ -1,0 +1,36 @@
+# Машиночитаемый указатель; первичный текст решения — source.
+decision_record:
+  id: ADR-0003
+  status: accepted
+  date: 2026-11-13
+  source: adr/0003-authentication.md
+  scope: Идентичности, транспорт и доступ к данным отдельных источников.
+  rationale: Проверка через провайдера или PostgreSQL для каждой точки не подходит при целевой нагрузке; отзыв прав не должен ждать истечения токена.
+  decisions:
+    - subject: identities_and_transport
+      choice: Keycloak; OIDC Authorization Code с PKCE для людей, OAuth 2.0 Client Credentials с отдельной идентичностью для агента; TLS снаружи и mTLS между сервисами.
+      source_section: Идентичности и транспорт
+    - subject: source_permissions
+      choice: READ и WRITE на конкретный источник хранятся в PostgreSQL; административная роль сама по себе не даёт READ/WRITE на все источники.
+      source_section: Права на источники
+    - subject: local_verification
+      choice: Локальная проверка токена и ограниченного по свежести подтверждённого снимка прав и статусов; если право достоверно проверить нельзя, приём не подтверждается и чтение запрещено.
+      source_section: Локальная проверка и отзыв
+  alternatives:
+    status: documented
+    items:
+      - {option: Общие API-ключи для агентов, disposition: rejected, reason: Нельзя индивидуально отозвать агента или проследить его действия., source_section: Рассмотренные альтернативы}
+      - {option: Клиентский mTLS-сертификат для каждого внешнего агента, disposition: not_required, reason: Нужен полный цикл выдачи и отзыва сертификатов; для внешних агентов mTLS не требуется., source_section: Рассмотренные альтернативы}
+      - {option: Права только в токене, disposition: rejected, reason: Отозванные разрешения оставались бы действительны до конца срока токена., source_section: Рассмотренные альтернативы}
+      - {option: Запрос к БД или Keycloak на каждую точку, disposition: rejected, reason: Нагрузка и зависимость приёма от доступности реестра и провайдера., source_section: Рассмотренные альтернативы}
+      - {option: Глобальная роль READ и отдельные права на каждое действие, disposition: rejected, reason: Данные разграничиваются по источникам; административные действия защищены ролью., source_section: Рассмотренные альтернативы}
+  verification_targets:
+    status: pending_verification
+    agent_token_lifetime_seconds: 300
+    max_snapshot_age_without_confirmation_seconds: 30
+    normal_revocation_delay_seconds: 30
+  consequences:
+    - Отзыв READ требует актуализации прав и исключения устаревшего кеша.
+    - Межисточниковый агрегат без доказанного состава источников не раскрывается.
+  references: [FR-001, FR-004, FR-020, FR-021, FR-022, FR-023, NFR-PERF-001, NFR-SEC-001, NFR-SEC-002, NFR-SEC-003, NFR-SEC-004, NFR-SEC-005]
+  open_questions: [AQ-008, AQ-009]

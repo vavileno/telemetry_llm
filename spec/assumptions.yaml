@@ -8,7 +8,6 @@ assumptions_registry:
     - planning_unverified означает расчётную гипотезу, adopted — уже принятое ограничение, open — нерешённый вопрос.
     - Целевые 5 минут и 30 секунд ADR-0003 приняты как цели проверки, но не как доказанные характеристики.
     - Вопросы EVQ-* сохраняют идентификаторы и подробности в spec/events.yaml; AQ-* обозначают остальные вопросы.
-    - Указание устаревшей проектной оценки не возвращает в требования прежнее окно 1s или его TTL.
 
   assumptions:
     - id: ASM-001
@@ -35,12 +34,6 @@ assumptions_registry:
       statement: Пример 50–100 байт на полную raw-точку и оценки сжатия из ADR-0002 не являются результатами замера или утверждёнными требованиями к ёмкости.
       sources: [{path: adr/0002-database-choice.md, section: Ёмкость (оценка порядка величины)}]
       related_requirements: [FR-012, FR-013]
-    - id: ASM-005
-      type: planning_assumption
-      status: planning_unverified
-      statement: Ориентир «1 год и более» и оценка размера архива агрегатов 1m/1h в ADR-0002 предварительны; для принятых окон 1m/5m/1h сроки хранения не заданы.
-      sources: [{path: adr/0002-database-choice.md, section: Решение}, {path: adr/0002-database-choice.md, section: Ёмкость (оценка порядка величины)}, {path: spec/database.dbml, table: ts.metric_aggregate}]
-      related_requirements: [FR-007, FR-013, NFR-DUR-002]
     - id: ASM-006
       type: planning_assumption
       status: planning_unverified
@@ -208,8 +201,8 @@ assumptions_registry:
     - id: AQ-007
       type: open_question
       status: open
-      statement: Сроки ClickHouse и MinIO для принятых агрегатов 1m/5m/1h и отдельный срок нормализованных данных не заданы; старое предложение 1s TTL 30 дней в ADR-0002 на эти окна не распространяется.
-      decision_needed: Утвердить сроки по уровням и окнам и согласовать устаревшие фрагменты ADR-0002 с выбранными окнами без подмены принятого требования.
+      statement: Сроки ClickHouse и MinIO для агрегатов 1m/5m/1h и отдельный срок нормализованных данных пока не заданы.
+      decision_needed: Утвердить сроки по уровням и окнам без подмены длительности окна сроком хранения.
       sources: [{path: adr/0002-database-choice.md, section: Решение}, {path: adr/0002-database-choice.md, section: "ClickHouse: исторические данные"}, {path: spec/database.dbml, table: ts.metric_aggregate}, {path: spec/requirements.yaml, ids: [FR-007, FR-012]}]
       related_requirements: [FR-007, FR-012, FR-013, NFR-DUR-002]
     - id: AQ-008

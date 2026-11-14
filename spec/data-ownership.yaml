@@ -1,0 +1,139 @@
+# Источник сведений о наборах данных и границах записи. Не задаёт сетевые ACL,
+# способ доступа к БД или исполняемую схему транзакций. Первичные решения — ADR/FR/BR.
+data_ownership:
+  id: telemetry-platform-data-ownership
+  status: draft
+  sources:
+    architecture: spec/architecture.yaml
+    physical_model: spec/database.dbml
+    events: spec/events.yaml
+  conventions:
+    - system_of_record относится к конкретному набору данных и этапу его хранения, а не ко всей истории телеметрии сразу.
+    - writer, progress_writer и readers отражают предложенную декомпозицию; они не разрешают прямой доступ к хранилищу и не образуют закрытую ACL.
+    - Источник истины для прав на источники — PostgreSQL; Keycloak является провайдером идентичностей, не каталогом этих привязок (ADR-0003).
+    - Kafka — транспорт и ограниченный replay, не постоянный источник истины для полного raw (ADR-0002).
+    - Ссылки на принятые ограничения сохраняют их силу независимо от проектного статуса назначений контейнеров.
+
+  datasets:
+    - dataset: source_and_metric_configuration
+      status: proposed
+      system_of_record: postgres
+      writer: control
+      readers: [ingestion, processing, alerting]
+      authority: Конфигурация в PostgreSQL; потребители могут использовать согласованные снимки.
+      sources: [ADR-0002, FR-021]
+    - dataset: source_access_grants
+      status: proposed
+      system_of_record: postgres
+      writer: control
+      readers: [ingestion, query]
+      constraint_ids: [AC-001]
+      constraint: Версионированные снимки ограниченной свежести; Keycloak хранит идентичности, не авторитетную привязку к источникам.
+      sources: [ADR-0003, FR-020, FR-022]
+    - dataset: raw_history
+      status: proposed
+      system_of_record: clickhouse
+      writer: storage_writer
+      readers: [query, archive, replay]
+      constraint_ids: [AC-002, AC-004]
+      constraint: Только после проверки measurementId и содержимого по BR-033.
+      authority: Полные точки в ClickHouse до проверенной архивации; после подтверждения архива и удаления проверенных точек чтение полного raw переходит к архиву MinIO.
+      sources: [ADR-0002, BR-031, BR-033]
+    - dataset: aggregate_history
+      status: proposed
+      system_of_record: clickhouse
+      writer: storage_writer
+      readers: [query, archive, replay]
+      authority: Агрегаты в ClickHouse; сроки хранения 1m/5m/1h и условия перехода в архив ещё не утверждены.
+      sources: [ADR-0002, FR-007, AQ-007]
+    - dataset: latest
+      status: proposed
+      system_of_record: redis_latest
+      writer: storage_writer
+      readers: [query]
+      representation: derived_projection
+      constraint_ids: [AC-003]
+      authority: Производное последнее значение ряда, не замена сохранённого полного raw.
+      sources: [ADR-0002, BR-010, FR-011]
+    - dataset: query_cache
+      status: proposed
+      system_of_record: redis_cache
+      writer: query
+      readers: [query]
+      representation: disposable_cache
+      authority: Кеш результатов, не источник истины; чтение не обходит проверку READ.
+      sources: [ADR-0002, ADR-0003]
+    - dataset: alert_state_events_outbox
+      status: proposed
+      system_of_record: postgres
+      writer: alerting
+      readers: [query, dispatcher]
+      constraint_ids: [AC-005, AC-006]
+      authority: Alert, AlertEvent и запись outbox в PostgreSQL; публикация в Kafka не входит в транзакцию перехода.
+      sources: [BR-032, FR-010]
+    - dataset: processing_failures
+      status: proposed
+      system_of_record: postgres
+      writer: processing
+      readers: [control]
+      sources: [ADR-0002, FR-018]
+    - dataset: replay_jobs
+      status: proposed
+      system_of_record: postgres
+      writer: control
+      progress_writer: replay
+      progress_writer_scope: Прогресс и результат задания; не создание и не административное изменение задания.
+      readers: [replay]
+      sources: [FR-017, FR-018]
+    - dataset: archive_catalog
+      status: proposed
+      system_of_record: postgres
+      writer: archive
+      readers: [query, replay]
+      authority: Метаданные и подтверждённый статус meta.archive_object в PostgreSQL; сами объекты находятся в MinIO.
+      sources: [ADR-0002, BR-031, AQ-003]
+    - dataset: raw_and_aggregate_archive
+      status: proposed
+      system_of_record: minio
+      writer: archive
+      readers: [query, replay]
+      authority: Проверенные архивные объекты полного raw и агрегатов хранятся отдельно; архив агрегатов не заменяет исходные точки.
+      sources: [ADR-0002, FR-013]
+
+  transaction_boundaries:
+    - id: TX-001
+      status: adopted
+      store: postgres
+      datasets: [alert_state_events_outbox]
+      records: [Alert, AlertEvent, AlertEventOutbox]
+      atomic_effect: Изменение состояния, неизменяемое событие и запись outbox фиксируются вместе; при ошибке все три откатываются.
+      outside_boundary: Публикация в Kafka и доставка внешнему получателю выполняются после фиксации; подтверждение сброса не означает доставку.
+      sources: [BR-032, FR-010, INV-008, AC-006]
+
+  acknowledgement_boundaries:
+    - id: ACK-001
+      status: adopted
+      system: kafka
+      unit: MetricSample
+      rule: Успех приёма подтверждается по точке только после надёжной записи в Kafka; отказ другой точки пакета не откатывает подтверждённую.
+      not_implied: Подтверждение не означает запись в ClickHouse, Redis или PostgreSQL и не гарантирует отсутствие дальнейшего конфликта measurementId.
+      sources: [FR-001, FR-004, BR-030, BR-033, AC-009]
+
+  cross_store_boundaries:
+    - id: CS-001
+      status: adopted
+      stores: [kafka, postgres, clickhouse, redis_latest]
+      datasets: [raw_history, aggregate_history, latest, alert_state_events_outbox]
+      rule: Транзакция Kafka не делает записи в PostgreSQL, ClickHouse и Redis общей атомарной операцией; успешный приём не равен успешной записи в каждом из них.
+      sources: [spec/events.yaml, ADR-0001, ADR-0002]
+    - id: CS-002
+      status: adopted
+      stores: [clickhouse, minio, postgres]
+      datasets: [raw_history, raw_and_aggregate_archive, archive_catalog]
+      rule: Перед удалением полного raw проверяются архив и каталог; запись объекта и каталога сама по себе не разрешает безусловное удаление исходных точек.
+      sources: [BR-031, FR-013, ADR-0002]
+
+  open_design:
+    - {id: EVQ-010, concerns: [raw_history], detail: Механизм устойчивой проверки measurementId и согласования Processing со Storage Writer не выбран.}
+    - {id: AQ-003, concerns: [raw_history, archive_catalog, raw_and_aggregate_archive], detail: Механизм выборочного удаления только проверенных raw-диапазонов ещё не согласован.}
+    - {id: AQ-007, concerns: [aggregate_history, raw_and_aggregate_archive], detail: Сроки хранения агрегатов 1m/5m/1h не назначены.}

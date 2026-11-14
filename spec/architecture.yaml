@@ -29,11 +29,17 @@ architecture:
     - adr/0003-authentication.md
     - adr/0004-event-serialization.md
     - adr/0005-kafka-partition-keys.md
+  decision_records:
+    ADR-0001: decisions/ADR-0001.yaml
+    ADR-0002: decisions/ADR-0002.yaml
+    ADR-0003: decisions/ADR-0003.yaml
+    ADR-0004: decisions/ADR-0004.yaml
+    ADR-0005: decisions/ADR-0005.yaml
 
   adopted_constraints:
     - id: AC-001
       status: adopted
-      sources: [adr/0003-authentication.md, FR-020, FR-022]
+      sources: [ADR-0003, FR-020, FR-022]
       rule: Внешний приём требует действительного WRITE и допустимого статуса каждого источника; чтение любого слоя и кеша требует READ, при недостоверных правах доступ не предоставляется.
     - id: AC-002
       status: adopted
@@ -45,7 +51,7 @@ architecture:
       rule: Более старое или неподтверждённое SUSPECT-измерение не заменяет latest; повторная запись не должна менять результат.
     - id: AC-004
       status: adopted
-      sources: [BR-031, FR-013]
+      sources: [ADR-0002, BR-031, FR-013]
       rule: Полный raw нельзя удалять из ClickHouse до проверки полноты, checksum и подтверждения каталога RAW_SAMPLES в PostgreSQL.
     - id: AC-005
       status: adopted
@@ -57,11 +63,11 @@ architecture:
       rule: При переходе Alert, AlertEvent и outbox фиксируются одной транзакцией PostgreSQL; повтор публикации сохраняет eventId.
     - id: AC-007
       status: adopted
-      sources: [adr/0005-kafka-partition-keys.md]
+      sources: [ADR-0005]
       rule: Логические ключи Kafka определены по типам событий; ключ не гарантирует дедупликацию, а число партиций и кодирование остаются открытыми.
     - id: AC-008
       status: adopted
-      sources: [adr/0004-event-serialization.md]
+      sources: [ADR-0004]
       rule: Внутренние Kafka-события используют Avro и Apicurio Registry с BACKWARD_TRANSITIVE; исполняемые схемы и framing ещё не утверждены.
     - id: AC-009
       status: adopted
@@ -72,7 +78,8 @@ architecture:
     scope: proposed_topology_with_adopted_guards
     write_authority:
       status: proposed
-      source: architecture.data_ownership
+      source: spec/data-ownership.yaml
+      section: data_ownership.datasets
       rule: Для каждого набора данных предполагаемые писатели указаны в writer и progress_writer; это не утверждает прямой доступ к хранилищу и не заменяет проверку принятых ограничений.
     prohibited_paths:
       - id: DP-001
@@ -105,8 +112,8 @@ architecture:
       - {connection: publish_normalized_for_alerting, questions: [EVQ-011], issue: Исключить результаты replay из live-оценки.}
       - {connection: publish_aggregates_for_alerting, questions: [EVQ-006, EVQ-011], issue: Утвердить маршрутизацию окон и изоляцию replay.}
     transaction_boundaries:
-      - {connection: persist_alert, constraint_ids: [AC-006], scope: PostgreSQL Alert + AlertEvent + outbox}
-      - {connection: publish_raw, constraint_ids: [AC-009], scope: Поэлементное подтверждение Kafka; downstream-хранилища не включены в одну транзакцию, source: spec/events.yaml}
+      - {connection: persist_alert, source: spec/data-ownership.yaml, boundary_id: TX-001, constraint_ids: [AC-006]}
+      - {connection: publish_raw, source: spec/data-ownership.yaml, boundary_id: ACK-001, constraint_ids: [AC-009]}
     delivery_details: spec/events.yaml
 
   access_control:
@@ -272,17 +279,9 @@ architecture:
     source: docs/05-architecture.md
 
   data_ownership:
-    - {dataset: source_and_metric_configuration, system_of_record: postgres, writer: control, readers: [ingestion, processing, alerting]}
-    - {dataset: source_access_grants, system_of_record: postgres, writer: control, readers: [ingestion, query], constraint_ids: [AC-001], constraint: Версионированные снимки ограниченной свежести; Keycloak хранит идентичности, не авторитетную привязку к источникам.}
-    - {dataset: raw_history, system_of_record: clickhouse, writer: storage_writer, readers: [query, archive, replay], constraint_ids: [AC-002, AC-004], constraint: Только после проверки measurementId и содержимого по BR-033.}
-    - {dataset: aggregate_history, system_of_record: clickhouse, writer: storage_writer, readers: [query, archive, replay]}
-    - {dataset: latest, system_of_record: redis_latest, writer: storage_writer, readers: [query], constraint_ids: [AC-003]}
-    - {dataset: query_cache, system_of_record: redis_cache, writer: query, readers: [query]}
-    - {dataset: alert_state_events_outbox, system_of_record: postgres, writer: alerting, readers: [query, dispatcher], constraint_ids: [AC-005, AC-006]}
-    - {dataset: processing_failures, system_of_record: postgres, writer: processing, readers: [control]}
-    - {dataset: replay_jobs, system_of_record: postgres, writer: control, progress_writer: replay, progress_writer_scope: Прогресс и результат задания; не создание и не административное изменение задания., readers: [replay]}
-    - {dataset: archive_catalog, system_of_record: postgres, writer: archive, readers: [query, replay]}
-    - {dataset: raw_and_aggregate_archive, system_of_record: minio, writer: archive, readers: [query, replay]}
+    source: spec/data-ownership.yaml
+    section: data_ownership.datasets
+    status: proposed
 
   connections:
     - {id: send_metrics, from: telemetry-source, to: ingestion, mode: request, data: Пакет точек с measurementId и ответ по каждой точке, status: proposed, constraint_ids: [AC-001, AC-009]}

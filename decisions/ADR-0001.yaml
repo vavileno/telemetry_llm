@@ -1,0 +1,30 @@
+# Машиночитаемый указатель; первичный текст решения — source.
+decision_record:
+  id: ADR-0001
+  status: accepted
+  source: adr/0001-architecture-style.md
+  scope: Архитектурный стиль платформы, а не число контейнеров или выбор продукта.
+  rationale: Независимое масштабирование этапов, устойчивость к всплескам и отсутствие синхронной цепочки на каждую точку.
+  decisions:
+    - subject: platform_style
+      choice: Потоковая распределённая архитектура с разделением приёма, буферизации, обработки, алертинга, хранения и запросов.
+      source_section: Решение
+    - subject: processing_interaction
+      choice: Надёжный поток данных между этапами вместо синхронной цепочки вызовов на каждое измерение.
+      source_section: Решение
+  alternatives:
+    status: documented
+    items:
+      - option: Модульный монолит
+        disposition: rejected
+        reason: Не обеспечивает требуемого независимого масштабирования и увеличивает риск общего bottleneck.
+        source_section: Модульный монолит
+      - option: Синхронные микросервисы без потокового буфера
+        disposition: rejected
+        reason: Повышают задержку приёма и риск отказа при всплеске или недоступности downstream.
+        source_section: Набор синхронных микросервисов без потокового буфера
+  consequences:
+    - Отдельные этапы можно масштабировать независимо, но усложняются контракты, диагностика и идемпотентность.
+    - Между слоями хранения возможна eventual consistency.
+  references: [NFR-SCALE-002, NFR-REL-001]
+  open_questions: []

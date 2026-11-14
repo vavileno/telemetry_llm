@@ -1,0 +1,41 @@
+# Машиночитаемый указатель; первичный текст решения — source.
+decision_record:
+  id: ADR-0002
+  status: accepted
+  date: 2026-01-20
+  source: adr/0002-database-choice.md
+  scope: Разделение классов данных по хранилищам и безопасное архивирование raw.
+  rationale: Одно хранилище не удовлетворяет одновременно требованиям к latest, аналитическим сканам, транзакционному состоянию и долговременному архиву.
+  decisions:
+    - subject: configuration_and_alert_state
+      choice: PostgreSQL — источник истины для конфигурации, состояния алертов и операционных записей.
+      source_section: Решение
+    - subject: latest_and_cache
+      choice: Отдельные инстансы Redis для latest и кеша запросов; кеш не является источником истины.
+      source_section: "Redis: последние значения и кэш"
+    - subject: raw_history_and_aggregates
+      choice: ClickHouse — исторические исходные точки и агрегаты; полный raw удерживается до проверенного архива, целевой срок в ClickHouse — сутки от receivedAt.
+      source_section: "ClickHouse: исторические данные"
+    - subject: archive
+      choice: MinIO + Parquet для архива полного raw отдельно от агрегатов; метаданные каталога — в meta.archive_object PostgreSQL.
+      source_section: "MinIO: архив"
+    - subject: streaming_buffer
+      choice: Kafka — ограниченный по retention транспорт и replay, не постоянная база raw.
+      source_section: "Kafka: граница ответственности"
+  alternatives:
+    status: documented
+    items:
+      - {option: Единый ClickHouse для всех классов, disposition: rejected, reason: Не заменяет транзакционную конфигурацию и быстрый latest., source_section: Единое хранилище ClickHouse для всех классов данных}
+      - {option: PostgreSQL + TimescaleDB для всех временных рядов, disposition: rejected, reason: Уступает по профилю записи и сканов при заявленной нагрузке., source_section: PostgreSQL + TimescaleDB как единое time-series хранилище}
+      - {option: InfluxDB open-source, disposition: rejected, reason: Ограничения горизонтального масштабирования открытой версии и аналитики., source_section: InfluxDB (open-source)}
+      - {option: Elasticsearch / OpenSearch, disposition: rejected, reason: Стоимость хранения и ресурсы на точку выше для этого профиля., source_section: Elasticsearch / OpenSearch}
+      - {option: Cassandra / ScyllaDB, disposition: rejected, reason: Требуется дополнительный аналитический слой для ad-hoc запросов и окон., source_section: Cassandra / ScyllaDB}
+      - {option: Redis как историческое хранилище, disposition: rejected, reason: Стоимость RAM и ограниченная аналитика., source_section: Redis как основное историческое хранилище}
+      - {option: Kafka как единственное хранилище, disposition: rejected, reason: Ограниченный retention и отсутствие произвольных аналитических запросов., source_section: Kafka (в том числе с tiered storage) как единственное хранилище}
+      - {option: MongoDB для метаданных, disposition: rejected, reason: Не даёт выигрыша для транзакционных связей и конфигурации., source_section: MongoDB для метаданных}
+      - {option: Облачное S3 вместо MinIO, disposition: deferred, reason: Self-hosted стенд использует MinIO; S3-совместимость сохраняет возможность замены., source_section: Облачное S3 вместо MinIO}
+  consequences:
+    - Уровни хранения согласуются идемпотентно и асинхронно, не общей транзакцией.
+    - Удаление raw из ClickHouse допускается только после проверки полного RAW_SAMPLES-архива и подтверждения каталога.
+  references: [FR-011, FR-012, FR-013, FR-017, BR-031]
+  open_questions: [AQ-001, AQ-002, AQ-003, AQ-004, AQ-007, EVQ-006, EVQ-009]

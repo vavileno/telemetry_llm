@@ -527,7 +527,7 @@ Table ts.metric_aggregate {
     // BR-012, INV-002: начало окна предшествует окончанию
     `window_started_at < window_ended_at` [name: 'chk_aggregate_window']
   }
-  note: 'ClickHouse: ReplacingMergeTree, шардирование по cityHash64(fingerprint) (ADR-0002). Поддерживаемые окна 1m/5m/1h (FR-007, BR-012); сроки их хранения пока не заданы. Упомянутый в ADR-0002 TTL 30 дней для прежнего проектного уровня 1s не является политикой хранения выбранных окон.'
+  note: 'ClickHouse: ReplacingMergeTree, шардирование по cityHash64(fingerprint) (ADR-0002). Поддерживаемые окна 1m/5m/1h (FR-007, BR-012); сроки их хранения пока не заданы.'
 }
 
 
